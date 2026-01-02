@@ -1,0 +1,99 @@
+# =============================================================================
+# Docker Compose for local development
+# =============================================================================
+# Usage:
+#   docker-compose up              # Start all services
+#   docker-compose up -d           # Start in background
+#   docker-compose logs -f api     # Follow API logs
+#   docker-compose down            # Stop all services
+# =============================================================================
+
+version: "3.9"
+
+services:
+  # ---------------------------------------------------------------------------
+  # SpecAgent API
+  # ---------------------------------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: specagent-api
+    ports:
+      - "8000:8000"
+    environment:
+      - HF_API_KEY=${HF_API_KEY}
+      - LOG_LEVEL=DEBUG
+      - ENABLE_TRACING=true
+      - PHOENIX_ENDPOINT=http://phoenix:6006
+    volumes:
+      # Mount data directory for index persistence
+      - ./data:/app/data:ro
+      # Mount source for development (optional)
+      # - ./src:/app/src:ro
+    depends_on:
+      - phoenix
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+    networks:
+      - specagent-network
+
+  # ---------------------------------------------------------------------------
+  # Arize Phoenix (Observability)
+  # ---------------------------------------------------------------------------
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    container_name: specagent-phoenix
+    ports:
+      - "6006:6006"   # Web UI
+      - "4317:4317"   # OTLP gRPC
+    environment:
+      - PHOENIX_WORKING_DIR=/data
+    volumes:
+      - phoenix-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6006/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - specagent-network
+
+  # ---------------------------------------------------------------------------
+  # Gradio UI (Demo interface)
+  # ---------------------------------------------------------------------------
+  ui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: specagent-ui
+    command: ["python", "-m", "specagent.ui"]
+    ports:
+      - "7860:7860"
+    environment:
+      - HF_API_KEY=${HF_API_KEY}
+      - API_ENDPOINT=http://api:8000
+    depends_on:
+      - api
+    networks:
+      - specagent-network
+    profiles:
+      - ui  # Only start with: docker-compose --profile ui up
+
+networks:
+  specagent-network:
+    driver: bridge
+
+volumes:
+  phoenix-data:
+    driver: local

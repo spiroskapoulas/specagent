@@ -1,0 +1,123 @@
+{
+  "name": "SpecAgent Development",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "..",
+    "args": {
+      "PYTHON_VERSION": "3.11"
+    }
+  },
+  
+  // Configure tool-specific properties
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-python.debugpy",
+        "charliermarsh.ruff",
+        "ms-python.mypy-type-checker",
+        "tamasfe.even-better-toml",
+        "redhat.vscode-yaml",
+        "davidanson.vscode-markdownlint",
+        "esbenp.prettier-vscode",
+        "github.copilot",
+        "ms-azuretools.vscode-docker",
+        "ms-kubernetes-tools.vscode-kubernetes-tools",
+        "eamodio.gitlens",
+        "yzhang.markdown-all-in-one",
+        "bierner.markdown-mermaid"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": ["tests"],
+        "python.analysis.typeCheckingMode": "basic",
+        "python.analysis.autoImportCompletions": true,
+        "[python]": {
+          "editor.defaultFormatter": "charliermarsh.ruff",
+          "editor.formatOnSave": true,
+          "editor.codeActionsOnSave": {
+            "source.fixAll.ruff": "explicit",
+            "source.organizeImports.ruff": "explicit"
+          }
+        },
+        "ruff.lint.args": ["--config=pyproject.toml"],
+        "ruff.format.args": ["--config=pyproject.toml"],
+        "files.exclude": {
+          "**/__pycache__": true,
+          "**/*.pyc": true,
+          ".pytest_cache": true,
+          ".mypy_cache": true,
+          ".ruff_cache": true,
+          "htmlcov": true,
+          "*.egg-info": true
+        },
+        "editor.rulers": [100],
+        "files.trimTrailingWhitespace": true,
+        "files.insertFinalNewline": true
+      }
+    }
+  },
+
+  // Features to add to the dev container
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/github-cli:1": {},
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "20"
+    },
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+
+  // Forward ports for local development
+  "forwardPorts": [
+    8000,  // FastAPI
+    6006,  // Phoenix UI
+    7860   // Gradio UI
+  ],
+  "portsAttributes": {
+    "8000": {
+      "label": "SpecAgent API",
+      "onAutoForward": "notify"
+    },
+    "6006": {
+      "label": "Phoenix Tracing",
+      "onAutoForward": "silent"
+    },
+    "7860": {
+      "label": "Gradio Demo",
+      "onAutoForward": "notify"
+    }
+  },
+
+  // Use 'postCreateCommand' to run commands after the container is created
+  "postCreateCommand": "bash .devcontainer/post-create.sh",
+
+  // Use 'postStartCommand' to run commands each time the container starts
+  "postStartCommand": "echo '✅ SpecAgent dev container ready! Run: specagent --help'",
+
+  // Environment variables
+  "containerEnv": {
+    "PYTHONPATH": "/workspaces/specagent/src",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONUNBUFFERED": "1"
+  },
+
+  // Mount points
+  "mounts": [
+    // Persist pip cache
+    "source=specagent-pip-cache,target=/home/vscode/.cache/pip,type=volume",
+    // Persist HuggingFace cache
+    "source=specagent-hf-cache,target=/home/vscode/.cache/huggingface,type=volume"
+  ],
+
+  // Run as non-root user
+  "remoteUser": "vscode",
+
+  // Minimum host requirements
+  "hostRequirements": {
+    "memory": "8gb",
+    "cpus": 4
+  }
+}

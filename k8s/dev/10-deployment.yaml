@@ -1,0 +1,241 @@
+# =============================================================================
+# Development Environment Deployment
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dev-environment
+  namespace: specagent-dev
+  labels:
+    app.kubernetes.io/name: specagent-dev
+    app.kubernetes.io/component: ide
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate  # Single instance, recreate on update
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: specagent-dev
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: specagent-dev
+    spec:
+      securityContext:
+        fsGroup: 1000  # coder user group
+      
+      initContainers:
+        # Clone the repo if workspace is empty
+        - name: git-clone
+          image: alpine/git:latest
+          command:
+            - /bin/sh
+            - -c
+            - |
+              if [ ! -d "/workspace/.git" ]; then
+                echo "Cloning specagent repository..."
+                git clone https://github.com/spiroskapoulas/specagent.git /workspace-tmp
+                if [ -d "/workspace-tmp/.git" ]; then
+                  cp -r /workspace-tmp/. /workspace/
+                  rm -rf /workspace-tmp
+                  echo "Repository cloned successfully"
+                else
+                  echo "Clone failed or repo is empty - workspace ready for manual setup"
+                  mkdir -p /workspace
+                fi
+              else
+                echo "Workspace already initialized, pulling latest..."
+                cd /workspace && git pull origin main || true
+              fi
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+
+      containers:
+        - name: code-server
+          image: specagent-dev:latest  # Change to your registry
+          imagePullPolicy: IfNotPresent
+          
+          ports:
+            - name: http
+              containerPort: 8443
+              protocol: TCP
+            - name: api
+              containerPort: 8000
+              protocol: TCP
+            - name: phoenix
+              containerPort: 6006
+              protocol: TCP
+            - name: gradio
+              containerPort: 7860
+              protocol: TCP
+          
+          env:
+            # code-server config
+            - name: PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: dev-secrets
+                  key: CODE_SERVER_PASSWORD
+            
+            # API Keys
+            - name: HF_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: dev-secrets
+                  key: HF_API_KEY
+            # Note: Claude Code with Pro uses OAuth - run 'claude login' after deployment
+          
+          envFrom:
+            - configMapRef:
+                name: dev-config
+          
+          command:
+            - /bin/bash
+            - -c
+            - |
+              # Install project in dev mode if pyproject.toml exists
+              if [ -f "/workspace/pyproject.toml" ]; then
+                cd /workspace && pip install --break-system-packages -e ".[dev,eval]" --quiet
+              fi
+              
+              # Start code-server
+              exec code-server \
+                --bind-addr 0.0.0.0:8443 \
+                --auth password \
+                --disable-telemetry \
+                /workspace
+          
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: cache
+              mountPath: /home/coder/.cache
+            - name: vscode-config
+              mountPath: /home/coder/.local/share/code-server
+          
+          resources:
+            requests:
+              memory: "4Gi"
+              cpu: "1000m"
+            limits:
+              memory: "8Gi"
+              cpu: "4000m"
+          
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+
+      volumes:
+        - name: workspace
+          persistentVolumeClaim:
+            claimName: workspace-pvc
+        - name: cache
+          persistentVolumeClaim:
+            claimName: cache-pvc
+        - name: vscode-config
+          emptyDir: {}
+
+---
+# =============================================================================
+# Service - Expose development environment
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: dev-environment
+  namespace: specagent-dev
+  labels:
+    app.kubernetes.io/name: specagent-dev
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8443
+      targetPort: http
+      protocol: TCP
+    - name: api
+      port: 8000
+      targetPort: api
+      protocol: TCP
+    - name: phoenix
+      port: 6006
+      targetPort: phoenix
+      protocol: TCP
+    - name: gradio
+      port: 7860
+      targetPort: gradio
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: specagent-dev
+
+---
+# =============================================================================
+# Ingress - External access (adjust for your domain)
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: dev-environment
+  namespace: specagent-dev
+  labels:
+    app.kubernetes.io/name: specagent-dev
+  annotations:
+    # For Traefik (k3s default)
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    # For cert-manager (optional)
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  rules:
+    # Main IDE access
+    - host: dev.specagent.local  # Change to your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dev-environment
+                port:
+                  number: 8443
+    # API access
+    - host: api.specagent.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dev-environment
+                port:
+                  number: 8000
+    # Phoenix tracing UI
+    - host: phoenix.specagent.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dev-environment
+                port:
+                  number: 6006
+  # TLS configuration (optional)
+  # tls:
+  #   - hosts:
+  #       - dev.specagent.local
+  #       - api.specagent.local
+  #       - phoenix.specagent.local
+  #     secretName: specagent-dev-tls

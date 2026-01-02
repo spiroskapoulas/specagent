@@ -1,0 +1,23 @@
+# Personal Settings (Example)
+
+Copy this file to `.claude/CLAUDE.local.md` for your personal preferences.
+This file is gitignored and won't be committed.
+
+## My Preferences
+
+- I prefer verbose explanations when learning new concepts
+- Skip explanations for basic Python patterns
+- Always show command output when running tests
+
+## My Environment
+
+- OS: [your OS]
+- Terminal: [your terminal]
+- Editor: VS Code
+
+## Custom Aliases
+
+```bash
+alias sa="specagent"
+alias pt="pytest -v"
+```

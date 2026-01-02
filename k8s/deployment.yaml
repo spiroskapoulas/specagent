@@ -1,0 +1,207 @@
+# =============================================================================
+# Kubernetes Deployment for 3GPP SpecAgent
+# =============================================================================
+# Deploy with:
+#   kubectl apply -f k8s/deployment.yaml
+#
+# For k3s, ensure you have a StorageClass for the PVC
+# =============================================================================
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: specagent
+  labels:
+    app.kubernetes.io/name: specagent
+
+---
+# =============================================================================
+# ConfigMap - Non-sensitive configuration
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: specagent-config
+  namespace: specagent
+  labels:
+    app.kubernetes.io/name: specagent
+data:
+  LOG_LEVEL: "INFO"
+  API_HOST: "0.0.0.0"
+  API_PORT: "8000"
+  ENABLE_TRACING: "true"
+  PHOENIX_ENDPOINT: "http://phoenix-service:6006"
+  EMBEDDING_MODEL: "sentence-transformers/all-MiniLM-L6-v2"
+  LLM_MODEL: "mistralai/Mistral-7B-Instruct-v0.3"
+  CHUNK_SIZE: "512"
+  CHUNK_OVERLAP: "64"
+  RETRIEVAL_TOP_K: "10"
+
+---
+# =============================================================================
+# Secret - Sensitive configuration (create separately or use external secrets)
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: specagent-secrets
+  namespace: specagent
+  labels:
+    app.kubernetes.io/name: specagent
+type: Opaque
+stringData:
+  HF_API_KEY: "your-huggingface-api-key"  # Replace with actual key or use sealed secrets
+
+---
+# =============================================================================
+# PersistentVolumeClaim - FAISS index storage
+# =============================================================================
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: specagent-index-pvc
+  namespace: specagent
+  labels:
+    app.kubernetes.io/name: specagent
+spec:
+  accessModes:
+    - ReadOnlyMany  # Index is read-only after build
+  resources:
+    requests:
+      storage: 5Gi
+  storageClassName: local-path  # Adjust for your cluster
+
+---
+# =============================================================================
+# Deployment
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: specagent
+  namespace: specagent
+  labels:
+    app.kubernetes.io/name: specagent
+    app.kubernetes.io/version: "0.1.0"
+spec:
+  replicas: 1  # Single replica due to memory constraints
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: specagent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: specagent
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: specagent
+          image: ghcr.io/yourusername/specagent:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: specagent-config
+            - secretRef:
+                name: specagent-secrets
+          volumeMounts:
+            - name: index-volume
+              mountPath: /app/data/index
+              readOnly: true
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "2000m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+      volumes:
+        - name: index-volume
+          persistentVolumeClaim:
+            claimName: specagent-index-pvc
+      terminationGracePeriodSeconds: 30
+
+---
+# =============================================================================
+# Service
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: specagent-service
+  namespace: specagent
+  labels:
+    app.kubernetes.io/name: specagent
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: specagent
+
+---
+# =============================================================================
+# Ingress (optional - configure for your domain)
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: specagent-ingress
+  namespace: specagent
+  labels:
+    app.kubernetes.io/name: specagent
+  annotations:
+    kubernetes.io/ingress.class: traefik  # Adjust for your ingress controller
+    # cert-manager.io/cluster-issuer: letsencrypt-prod  # If using cert-manager
+spec:
+  rules:
+    - host: specagent.yourdomain.com  # Replace with your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: specagent-service
+                port:
+                  number: 80
+  # tls:
+  #   - hosts:
+  #       - specagent.yourdomain.com
+  #     secretName: specagent-tls

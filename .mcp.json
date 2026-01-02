@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/anthropics/claude-code/main/mcp-schema.json",
+  "mcpServers": {
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@anthropic/mcp-server-filesystem",
+        "/workspaces/specagent"
+      ],
+      "description": "Access to project filesystem"
+    }
+  }
+}
