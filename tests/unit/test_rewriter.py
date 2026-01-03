@@ -273,3 +273,19 @@ class TestRewriterNode:
         assert question in prompt
         assert "HARQ" in prompt  # From chunk content
         assert any(keyword in prompt.lower() for keyword in ["rewrite", "reformulate", "specific"])
+
+    @patch('specagent.nodes.rewriter.HuggingFaceHub')
+    def test_rewriter_handles_non_string_llm_response(self, mock_hf_hub):
+        """Test that rewriter handles non-string LLM response."""
+        mock_llm = MagicMock()
+        # Mock LLM returns a non-string (e.g., dict or object)
+        mock_llm.invoke.return_value = {"text": "Some response"}
+        mock_hf_hub.return_value = mock_llm
+
+        state = self._create_state_with_low_confidence("Test question")
+
+        result = rewriter_node(state)
+
+        # Should still set the rewritten_question even if it's not a string
+        assert result["rewritten_question"] == {"text": "Some response"}
+        assert result["rewrite_count"] == 1
