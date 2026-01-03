@@ -49,14 +49,14 @@ class TestRetrievedChunk:
 class TestGradedChunk:
     """Tests for GradedChunk dataclass."""
 
-    def test_graded_chunk_creation(self, sample_chunks):
+    def test_graded_chunk_creation(self):
         """GradedChunk should wrap RetrievedChunk with grade info."""
         retrieved = RetrievedChunk(
-            content=sample_chunks[0].content,
-            spec_id=sample_chunks[0].spec_id,
-            section=sample_chunks[0].section,
+            content="Test content",
+            spec_id="TS38.321",
+            section="5.4",
             similarity_score=0.9,
-            chunk_id=sample_chunks[0].chunk_id,
+            chunk_id="TS38.321.md:0",
         )
 
         graded = GradedChunk(
@@ -65,7 +65,7 @@ class TestGradedChunk:
             confidence=0.85,
         )
 
-        assert graded.chunk.content == sample_chunks[0].content
+        assert graded.chunk.content == "Test content"
         assert graded.relevant == "yes"
         assert graded.confidence == 0.85
 

@@ -12,7 +12,7 @@ Graph visualization can be exported via get_graph_visualization().
 from typing import Literal
 
 from langgraph.graph import END, START, StateGraph
-from langgraph.graph.graph import CompiledGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from specagent.config import settings
 from specagent.graph.state import GraphState, create_initial_state
@@ -77,7 +77,7 @@ def should_regenerate(state: GraphState) -> Literal["regenerate", "finish"]:
     return "finish"
 
 
-def build_graph() -> CompiledGraph:
+def build_graph() -> CompiledStateGraph:
     """
     Build and compile the agentic RAG graph.
 

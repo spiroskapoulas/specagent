@@ -51,43 +51,43 @@ def sample_chunks():
     return [
         Chunk(
             content="The maximum number of HARQ processes for NR is 16 for both FDD and TDD.",
-            source_file="TS38.321.md",
-            section_header="5.4 HARQ Entity",
-            chunk_index=0,
-            spec_id="TS38.321",
-            section="5.4",
+            metadata={
+                "source_file": "TS38.321.md",
+                "section_header": "5.4 HARQ Entity",
+                "chunk_index": 0,
+            },
         ),
         Chunk(
             content="The UE shall support a maximum of 16 component carriers for carrier aggregation.",
-            source_file="TS38.101-1.md",
-            section_header="5.5A Carrier Aggregation",
-            chunk_index=0,
-            spec_id="TS38.101-1",
-            section="5.5A",
+            metadata={
+                "source_file": "TS38.101-1.md",
+                "section_header": "5.5A Carrier Aggregation",
+                "chunk_index": 0,
+            },
         ),
         Chunk(
             content="RRC connection re-establishment procedure is initiated when T311 expires.",
-            source_file="TS38.331.md",
-            section_header="5.3.7 RRC connection re-establishment",
-            chunk_index=0,
-            spec_id="TS38.331",
-            section="5.3.7",
+            metadata={
+                "source_file": "TS38.331.md",
+                "section_header": "5.3.7 RRC connection re-establishment",
+                "chunk_index": 0,
+            },
         ),
         Chunk(
             content="The PDCCH is used to carry downlink control information (DCI).",
-            source_file="TS38.211.md",
-            section_header="7.3 Physical downlink control channel",
-            chunk_index=0,
-            spec_id="TS38.211",
-            section="7.3",
+            metadata={
+                "source_file": "TS38.211.md",
+                "section_header": "7.3 Physical downlink control channel",
+                "chunk_index": 0,
+            },
         ),
         Chunk(
             content="The gNB-DU and gNB-CU are connected via the F1 interface.",
-            source_file="TS38.401.md",
-            section_header="6.1 F1 Interface",
-            chunk_index=0,
-            spec_id="TS38.401",
-            section="6.1",
+            metadata={
+                "source_file": "TS38.401.md",
+                "section_header": "6.1 F1 Interface",
+                "chunk_index": 0,
+            },
         ),
     ]
 

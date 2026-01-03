@@ -6,7 +6,7 @@ workflow. Each node reads from and writes to this shared state.
 """
 
 from dataclasses import dataclass, field
-from typing import Literal, TypedDict
+from typing import Literal, Optional, TypedDict
 
 
 @dataclass
@@ -98,7 +98,7 @@ class GraphState(TypedDict, total=False):
     # ==========================================================================
     # Retrieval
     # ==========================================================================
-    rewritten_question: str | None
+    rewritten_question: Optional[str]
     """Reformulated question for improved retrieval (if rewriting was needed)."""
 
     retrieved_chunks: list[RetrievedChunk]
@@ -122,7 +122,7 @@ class GraphState(TypedDict, total=False):
     # ==========================================================================
     # Generation
     # ==========================================================================
-    generation: str | None
+    generation: Optional[str]
     """The generated answer text."""
 
     citations: list[Citation]
@@ -140,7 +140,7 @@ class GraphState(TypedDict, total=False):
     # ==========================================================================
     # Metadata
     # ==========================================================================
-    error: str | None
+    error: Optional[str]
     """Error message if something went wrong."""
 
     processing_time_ms: float
