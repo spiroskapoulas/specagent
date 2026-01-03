@@ -10,7 +10,10 @@ Uses structured output from LLM to get routing decision with reasoning.
 
 from typing import TYPE_CHECKING, Literal
 
+from langchain_community.llms import HuggingFaceHub
 from pydantic import BaseModel, Field
+
+from specagent.config import settings
 
 if TYPE_CHECKING:
     from specagent.graph.state import GraphState
@@ -51,9 +54,37 @@ def router_node(state: "GraphState") -> "GraphState":
     Returns:
         Updated state with route_decision set to "retrieve" or "reject"
     """
-    # TODO: Implement router logic
-    # 1. Get question from state
-    # 2. Call LLM with structured output (RouteDecision)
-    # 3. Update state["route_decision"]
-    # 4. Return updated state
-    raise NotImplementedError("Router node not yet implemented")
+    # Get question from state
+    question = state.get("question", "")
+
+    try:
+        # Initialize HuggingFace LLM
+        llm = HuggingFaceHub(
+            repo_id=settings.llm_model,
+            huggingfacehub_api_token=settings.hf_api_key_value,
+            model_kwargs={
+                "temperature": settings.llm_temperature,
+                "max_new_tokens": settings.llm_max_tokens,
+            },
+        )
+
+        # Get structured output
+        structured_llm = llm.with_structured_output(RouteDecision)
+
+        # Format prompt with question
+        prompt = ROUTER_PROMPT.format(question=question)
+
+        # Call LLM
+        decision: RouteDecision = structured_llm.invoke(prompt)
+
+        # Update state with decision
+        state["route_decision"] = decision.route
+        state["route_reasoning"] = decision.reasoning
+
+    except Exception as e:
+        # Handle errors gracefully - default to reject for safety
+        state["route_decision"] = "reject"
+        state["route_reasoning"] = "Error occurred during routing"
+        state["error"] = f"Router error: {str(e)}"
+
+    return state
