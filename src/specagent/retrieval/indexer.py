@@ -5,8 +5,11 @@ Provides efficient similarity search over document chunk embeddings
 with metadata storage and persistence.
 """
 
+import json
 from pathlib import Path
+from typing import Optional
 
+import faiss
 import numpy as np
 from numpy.typing import NDArray
 
@@ -28,7 +31,7 @@ class FAISSIndex:
         >>> index.save("data/index/faiss.index")
     """
 
-    def __init__(self, dimension: int | None = None) -> None:
+    def __init__(self, dimension: Optional[int] = None) -> None:
         """
         Initialize the FAISS index.
 
@@ -36,7 +39,7 @@ class FAISSIndex:
             dimension: Vector dimension (default from settings)
         """
         self.dimension = dimension or settings.embedding_dimension
-        self._index = None
+        self._index: Optional[faiss.IndexFlatIP] = None
         self._chunks: list[Chunk] = []
 
     @property
@@ -65,20 +68,45 @@ class FAISSIndex:
 
         Raises:
             ValueError: If chunks and embeddings have different lengths
+            ValueError: If embeddings have wrong dimension
         """
-        # TODO: Implement index building
-        # 1. Validate inputs (same length, correct dimension)
-        # 2. Normalize embeddings for cosine similarity
-        # 3. Create FAISS IndexFlatIP
-        # 4. Add vectors to index
-        # 5. Store chunks for metadata lookup
-        raise NotImplementedError("Index building not yet implemented")
+        # Validate inputs
+        if len(chunks) != len(embeddings):
+            raise ValueError(
+                f"Chunks and embeddings must have same length: "
+                f"got {len(chunks)} chunks and {len(embeddings)} embeddings"
+            )
+
+        if len(embeddings) > 0 and embeddings.shape[1] != self.dimension:
+            raise ValueError(
+                f"Embeddings must have dimension {self.dimension}, "
+                f"got {embeddings.shape[1]}"
+            )
+
+        # Normalize embeddings for cosine similarity
+        if len(embeddings) > 0:
+            normalized_embeddings = self._normalize_embeddings(embeddings)
+        else:
+            normalized_embeddings = embeddings
+
+        # Create FAISS IndexFlatIP for inner product (cosine similarity with normalized vectors)
+        self._index = faiss.IndexFlatIP(self.dimension)
+
+        # Add vectors to index
+        if len(normalized_embeddings) > 0:
+            # Ensure array is contiguous
+            if not normalized_embeddings.flags['C_CONTIGUOUS']:
+                normalized_embeddings = np.ascontiguousarray(normalized_embeddings)
+            self._index.add(normalized_embeddings)
+
+        # Store chunks for metadata lookup
+        self._chunks = list(chunks)
 
     def search(
         self,
         query_embedding: NDArray[np.float32],
         k: int = 10,
-        threshold: float | None = None,
+        threshold: Optional[float] = None,
     ) -> list[tuple[Chunk, float]]:
         """
         Search for similar chunks.
@@ -86,44 +114,127 @@ class FAISSIndex:
         Args:
             query_embedding: Query vector of shape (dimension,)
             k: Number of results to return
-            threshold: Minimum similarity score (default from settings)
+            threshold: Minimum similarity score (optional)
 
         Returns:
             List of (chunk, similarity_score) tuples, sorted by score descending
-        """
-        # TODO: Implement search logic
-        # 1. Normalize query embedding
-        # 2. Search FAISS index
-        # 3. Filter by threshold
-        # 4. Return chunks with scores
-        raise NotImplementedError("Search not yet implemented")
 
-    def save(self, path: str | Path | None = None) -> None:
+        Raises:
+            RuntimeError: If index has not been built
+        """
+        if not self.is_built:
+            raise RuntimeError("Index has not been built. Call build() first.")
+
+        # Handle empty index
+        if self.size == 0:
+            return []
+
+        # Normalize query embedding
+        normalized_query = self._normalize_embeddings(query_embedding.reshape(1, -1))
+
+        # Ensure array is contiguous
+        if not normalized_query.flags['C_CONTIGUOUS']:
+            normalized_query = np.ascontiguousarray(normalized_query)
+
+        # Limit k to index size
+        k = min(k, self.size)
+
+        # Search FAISS index
+        scores, indices = self._index.search(normalized_query, k)
+
+        # Convert to list of (chunk, score) tuples
+        results: list[tuple[Chunk, float]] = []
+        for i in range(len(indices[0])):
+            idx = indices[0][i]
+            score = float(scores[0][i])
+
+            # Filter by threshold if provided
+            if threshold is not None and score < threshold:
+                continue
+
+            chunk = self._chunks[idx]
+            results.append((chunk, score))
+
+        return results
+
+    def save(self, path: Optional[str | Path] = None) -> None:
         """
         Save index and metadata to disk.
 
         Args:
-            path: Path for index file (default from settings)
-        """
-        # TODO: Implement save logic
-        # 1. Save FAISS index with faiss.write_index()
-        # 2. Save chunk metadata to JSON
-        raise NotImplementedError("Save not yet implemented")
+            path: Base path for index files (default from settings)
 
-    def load(self, path: str | Path | None = None) -> None:
+        Raises:
+            RuntimeError: If index has not been built
+        """
+        if not self.is_built:
+            raise RuntimeError("Index has not been built. Call build() first.")
+
+        # Use default path if not provided
+        if path is None:
+            path = settings.faiss_index_path
+
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Save FAISS index
+        index_file = path.with_suffix('.index')
+        faiss.write_index(self._index, str(index_file))
+
+        # Save chunk metadata to JSON
+        metadata_file = path.with_suffix('.json')
+        chunks_data = [
+            {
+                "content": chunk.content,
+                "metadata": chunk.metadata,
+            }
+            for chunk in self._chunks
+        ]
+
+        with open(metadata_file, 'w', encoding='utf-8') as f:
+            json.dump(chunks_data, f, indent=2, ensure_ascii=False)
+
+    def load(self, path: Optional[str | Path] = None) -> None:
         """
         Load index and metadata from disk.
 
         Args:
-            path: Path to index file (default from settings)
+            path: Base path to index files (default from settings)
+
+        Raises:
+            FileNotFoundError: If index files don't exist
         """
-        # TODO: Implement load logic
-        # 1. Load FAISS index with faiss.read_index()
-        # 2. Load chunk metadata from JSON
-        raise NotImplementedError("Load not yet implemented")
+        # Use default path if not provided
+        if path is None:
+            path = settings.faiss_index_path
+
+        path = Path(path)
+
+        # Load FAISS index
+        index_file = path.with_suffix('.index')
+        if not index_file.exists():
+            raise FileNotFoundError(f"Index file not found: {index_file}")
+
+        self._index = faiss.read_index(str(index_file))
+
+        # Load chunk metadata from JSON
+        metadata_file = path.with_suffix('.json')
+        if not metadata_file.exists():
+            raise FileNotFoundError(f"Metadata file not found: {metadata_file}")
+
+        with open(metadata_file, 'r', encoding='utf-8') as f:
+            chunks_data = json.load(f)
+
+        self._chunks = [
+            Chunk(
+                content=chunk_data["content"],
+                metadata=chunk_data["metadata"],
+            )
+            for chunk_data in chunks_data
+        ]
 
     @classmethod
-    def from_disk(cls, path: str | Path | None = None) -> "FAISSIndex":
+    def from_disk(cls, path: Optional[str | Path] = None) -> "FAISSIndex":
         """
         Create index instance from saved files.
 
@@ -136,3 +247,18 @@ class FAISSIndex:
         index = cls()
         index.load(path)
         return index
+
+    def _normalize_embeddings(self, embeddings: NDArray[np.float32]) -> NDArray[np.float32]:
+        """
+        Normalize embeddings to unit length for cosine similarity.
+
+        Args:
+            embeddings: Array of shape (n, dimension)
+
+        Returns:
+            Normalized embeddings of same shape
+        """
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        # Avoid division by zero
+        norms = np.where(norms == 0, 1, norms)
+        return embeddings / norms
