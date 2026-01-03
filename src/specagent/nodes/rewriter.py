@@ -8,6 +8,10 @@ subsequent retrieval.
 
 from typing import TYPE_CHECKING
 
+from langchain_community.llms import HuggingFaceHub
+
+from specagent.config import settings
+
 if TYPE_CHECKING:
     from specagent.graph.state import GraphState
 
@@ -39,12 +43,59 @@ def rewriter_node(state: "GraphState") -> "GraphState":
     Returns:
         Updated state with rewritten_question and incremented rewrite_count
     """
-    # TODO: Implement rewriter logic
-    # 1. Get original question and failed chunks summary
-    # 2. Check if rewrite_count >= max_rewrites
-    # 3. If at limit, return state unchanged
-    # 4. Call LLM with rewriter prompt
-    # 5. Update state["rewritten_question"]
-    # 6. Increment state["rewrite_count"]
-    # 7. Return updated state
-    raise NotImplementedError("Rewriter node not yet implemented")
+    # Get original question and current rewrite count
+    question = state.get("question", "")
+    rewrite_count = state.get("rewrite_count", 0)
+
+    # Check if we've reached the maximum number of rewrites
+    if rewrite_count >= settings.max_rewrites:
+        # Don't rewrite if at limit
+        return state
+
+    # Get retrieved chunks for context
+    retrieved_chunks = state.get("retrieved_chunks", [])
+
+    try:
+        # Build summary of retrieved chunks
+        if retrieved_chunks:
+            chunks_summary = "\n".join([
+                f"- {chunk.content[:200]}..." if len(chunk.content) > 200 else f"- {chunk.content}"
+                for chunk in retrieved_chunks[:5]  # Limit to first 5 chunks
+            ])
+        else:
+            chunks_summary = "(No chunks retrieved)"
+
+        # Initialize HuggingFace LLM
+        llm = HuggingFaceHub(
+            repo_id=settings.llm_model,
+            huggingfacehub_api_token=settings.hf_api_key_value,
+            model_kwargs={
+                "temperature": settings.llm_temperature,
+                "max_new_tokens": settings.llm_max_tokens,
+            },
+        )
+
+        # Format prompt with question and chunk summary
+        prompt = REWRITER_PROMPT.format(
+            question=question,
+            retrieved_chunks_summary=chunks_summary
+        )
+
+        # Call LLM to rewrite the question
+        rewritten_question = llm.invoke(prompt)
+
+        # Strip whitespace from the response
+        if isinstance(rewritten_question, str):
+            rewritten_question = rewritten_question.strip()
+
+        # Update state with rewritten question
+        state["rewritten_question"] = rewritten_question
+
+        # Increment rewrite count
+        state["rewrite_count"] = rewrite_count + 1
+
+    except Exception as e:
+        # Handle errors gracefully
+        state["error"] = f"Rewriter error: {e!s}"
+
+    return state
