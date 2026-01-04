@@ -399,3 +399,82 @@ class TestHuggingFaceEmbedder:
 
         with pytest.raises(RuntimeError, match="Unexpected error in embed_batch_async"):
             await embedder._embed_batch_async(["test"])
+
+    def test_embed_batch_sync_429_exception_continue_path(self, monkeypatch):
+        """Test exception handler 429 continue path (line 129 not raising)."""
+        call_count = [0]
+
+        # Create a mock client that raises HTTPStatusError with 429 on first call
+        class MockResponse:
+            def __init__(self, is_error):
+                self.status_code = 200 if not is_error else 429
+                self.is_error = is_error
+
+            def json(self):
+                return [[0.1] * 384]
+
+            def raise_for_status(self):
+                if self.is_error:
+                    raise httpx.HTTPStatusError("Rate limit", request=None, response=self)
+
+        class MockClient:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+            def post(self, *args, **kwargs):
+                call_count[0] += 1
+                # First call: raise HTTPStatusError with 429 (not via status_code check)
+                # Second call: succeed
+                return MockResponse(is_error=(call_count[0] == 1))
+
+        monkeypatch.setattr(httpx, "Client", lambda timeout: MockClient())
+
+        embedder = HuggingFaceEmbedder(api_key="test-key")
+        result = embedder._embed_batch_sync(["test"])
+
+        # Should have made 2 calls (first raised 429, caught, continued; second succeeded)
+        assert call_count[0] == 2
+        assert result.shape == (1, 384)
+
+    @pytest.mark.asyncio
+    async def test_embed_batch_async_429_exception_continue_path(self, monkeypatch):
+        """Test async exception handler 429 continue path (line 211 not raising)."""
+        call_count = [0]
+
+        # Create a mock client that raises HTTPStatusError with 429 on first call
+        class MockResponse:
+            def __init__(self, is_error):
+                self.status_code = 200 if not is_error else 429
+                self.is_error = is_error
+
+            def json(self):
+                return [[0.1] * 384]
+
+            def raise_for_status(self):
+                if self.is_error:
+                    raise httpx.HTTPStatusError("Rate limit", request=None, response=self)
+
+        class MockAsyncClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            async def post(self, *args, **kwargs):
+                call_count[0] += 1
+                # First call: raise HTTPStatusError with 429 (not via status_code check)
+                # Second call: succeed
+                return MockResponse(is_error=(call_count[0] == 1))
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda timeout: MockAsyncClient())
+
+        embedder = HuggingFaceEmbedder(api_key="test-key")
+        result = await embedder._embed_batch_async(["test"])
+
+        # Should have made 2 calls (first raised 429, caught, continued; second succeeded)
+        assert call_count[0] == 2
+        assert result.shape == (1, 384)
