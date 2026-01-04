@@ -7,7 +7,7 @@ and identify any claims not supported by the retrieved context.
 
 from typing import TYPE_CHECKING, Literal
 
-from langchain_community.llms import HuggingFaceHub
+from langchain_huggingface import HuggingFaceEndpoint
 from pydantic import BaseModel, Field
 
 from specagent.config import settings
@@ -47,12 +47,15 @@ Carefully verify each factual claim in the answer:
 2. Are any claims made that go beyond what the sources state?
 3. Are any specifications or section numbers cited that don't match the sources?
 
-Determine if the answer is:
-- "yes": All claims are fully supported by the sources
-- "partial": Most claims are supported, but some minor details are not
-- "no": Significant claims are not supported by the sources
+Respond with ONLY a JSON object in this exact format:
+{{"grounded": "yes", "ungrounded_claims": []}}
+or
+{{"grounded": "partial", "ungrounded_claims": ["claim 1", "claim 2"]}}
+or
+{{"grounded": "no", "ungrounded_claims": ["claim 1", "claim 2", "claim 3"]}}
 
-List any specific claims that are not supported."""
+Where grounded is "yes" if all claims are fully supported, "partial" if most claims are supported,
+or "no" if significant claims are not supported."""
 
 
 def hallucination_check_node(state: "GraphState") -> "GraphState":
@@ -85,17 +88,12 @@ def hallucination_check_node(state: "GraphState") -> "GraphState":
     if not relevant_chunks:
         try:
             # Initialize HuggingFace LLM
-            llm = HuggingFaceHub(
+            llm = HuggingFaceEndpoint(
                 repo_id=settings.llm_model,
                 huggingfacehub_api_token=settings.hf_api_key_value,
-                model_kwargs={
-                    "temperature": settings.llm_temperature,
-                    "max_new_tokens": settings.llm_max_tokens,
-                },
+                temperature=settings.llm_temperature,
+                max_new_tokens=settings.llm_max_tokens,
             )
-
-            # Get structured output
-            structured_llm = llm.with_structured_output(HallucinationResult)
 
             # Format prompt with empty sources
             prompt = HALLUCINATION_PROMPT.format(
@@ -104,7 +102,19 @@ def hallucination_check_node(state: "GraphState") -> "GraphState":
             )
 
             # Call LLM to check for hallucinations
-            check_result: HallucinationResult = structured_llm.invoke(prompt)
+            response = llm.invoke(prompt)
+
+            # Parse JSON response
+            import json
+            import re
+
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                parsed = json.loads(json_str)
+                check_result = HallucinationResult(**parsed)
+            else:
+                check_result = HallucinationResult(**json.loads(response))
 
             # Map HallucinationResult.grounded to state hallucination_check values
             if check_result.grounded == "yes":
@@ -135,17 +145,12 @@ def hallucination_check_node(state: "GraphState") -> "GraphState":
         sources = "\n\n".join(source_parts)
 
         # Initialize HuggingFace LLM
-        llm = HuggingFaceHub(
+        llm = HuggingFaceEndpoint(
             repo_id=settings.llm_model,
             huggingfacehub_api_token=settings.hf_api_key_value,
-            model_kwargs={
-                "temperature": settings.llm_temperature,
-                "max_new_tokens": settings.llm_max_tokens,
-            },
+            temperature=settings.llm_temperature,
+            max_new_tokens=settings.llm_max_tokens,
         )
-
-        # Get structured output
-        structured_llm = llm.with_structured_output(HallucinationResult)
 
         # Format prompt with sources and answer
         prompt = HALLUCINATION_PROMPT.format(
@@ -154,7 +159,19 @@ def hallucination_check_node(state: "GraphState") -> "GraphState":
         )
 
         # Call LLM to check for hallucinations
-        result: HallucinationResult = structured_llm.invoke(prompt)
+        response = llm.invoke(prompt)
+
+        # Parse JSON response
+        import json
+        import re
+
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            parsed = json.loads(json_str)
+            result = HallucinationResult(**parsed)
+        else:
+            result = HallucinationResult(**json.loads(response))
 
         # Map HallucinationResult.grounded to state hallucination_check values
         if result.grounded == "yes":

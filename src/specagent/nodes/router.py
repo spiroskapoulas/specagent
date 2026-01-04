@@ -10,7 +10,7 @@ Uses structured output from LLM to get routing decision with reasoning.
 
 from typing import TYPE_CHECKING, Literal
 
-from langchain_community.llms import HuggingFaceHub
+from langchain_huggingface import HuggingFaceEndpoint
 from pydantic import BaseModel, Field
 
 from specagent.config import settings
@@ -41,7 +41,10 @@ telecommunications protocols, or any telecom standards topic, route to "retrieve
 If the question is completely unrelated (e.g., cooking, sports, general knowledge
 unrelated to telecom), route to "reject".
 
-Respond with your routing decision and brief reasoning."""
+Respond with ONLY a JSON object in this exact format:
+{{"route": "retrieve", "reasoning": "your explanation"}}
+or
+{{"route": "reject", "reasoning": "your explanation"}}"""
 
 
 def router_node(state: "GraphState") -> "GraphState":
@@ -59,23 +62,32 @@ def router_node(state: "GraphState") -> "GraphState":
 
     try:
         # Initialize HuggingFace LLM
-        llm = HuggingFaceHub(
+        llm = HuggingFaceEndpoint(
             repo_id=settings.llm_model,
             huggingfacehub_api_token=settings.hf_api_key_value,
-            model_kwargs={
-                "temperature": settings.llm_temperature,
-                "max_new_tokens": settings.llm_max_tokens,
-            },
+            temperature=settings.llm_temperature,
+            max_new_tokens=settings.llm_max_tokens,
         )
-
-        # Get structured output
-        structured_llm = llm.with_structured_output(RouteDecision)
 
         # Format prompt with question
         prompt = ROUTER_PROMPT.format(question=question)
 
         # Call LLM
-        decision: RouteDecision = structured_llm.invoke(prompt)
+        response = llm.invoke(prompt)
+
+        # Parse JSON response
+        import json
+        import re
+
+        # Extract JSON from response (handle cases where LLM adds extra text)
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            parsed = json.loads(json_str)
+            decision = RouteDecision(**parsed)
+        else:
+            # Fallback: try to parse the entire response
+            decision = RouteDecision(**json.loads(response))
 
         # Update state with decision
         state["route_decision"] = decision.route

@@ -8,7 +8,7 @@ subsequent retrieval.
 
 from typing import TYPE_CHECKING
 
-from langchain_community.llms import HuggingFaceHub
+from langchain_huggingface import HuggingFaceEndpoint
 
 from specagent.config import settings
 
@@ -66,13 +66,11 @@ def rewriter_node(state: "GraphState") -> "GraphState":
             chunks_summary = "(No chunks retrieved)"
 
         # Initialize HuggingFace LLM
-        llm = HuggingFaceHub(
+        llm = HuggingFaceEndpoint(
             repo_id=settings.llm_model,
             huggingfacehub_api_token=settings.hf_api_key_value,
-            model_kwargs={
-                "temperature": settings.llm_temperature,
-                "max_new_tokens": settings.llm_max_tokens,
-            },
+            temperature=settings.llm_temperature,
+            max_new_tokens=settings.llm_max_tokens,
         )
 
         # Format prompt with question and chunk summary

@@ -10,7 +10,7 @@ If average confidence is below threshold, triggers query rewriting.
 
 from typing import TYPE_CHECKING, Literal
 
-from langchain_community.llms import HuggingFaceHub
+from langchain_huggingface import HuggingFaceEndpoint
 from pydantic import BaseModel, Field
 
 from specagent.config import settings
@@ -45,7 +45,12 @@ Document chunk:
 Does this document contain information relevant to answering the question?
 Consider: exact matches, related concepts, prerequisite information.
 
-Assess the relevance and your confidence in that assessment."""
+Respond with ONLY a JSON object in this exact format:
+{{"relevant": "yes", "confidence": 0.85}}
+or
+{{"relevant": "no", "confidence": 0.2}}
+
+The confidence must be a number between 0.0 and 1.0."""
 
 
 def grader_node(state: "GraphState") -> "GraphState":
@@ -72,21 +77,19 @@ def grader_node(state: "GraphState") -> "GraphState":
 
     try:
         # Initialize HuggingFace LLM
-        llm = HuggingFaceHub(
+        llm = HuggingFaceEndpoint(
             repo_id=settings.llm_model,
             huggingfacehub_api_token=settings.hf_api_key_value,
-            model_kwargs={
-                "temperature": settings.llm_temperature,
-                "max_new_tokens": settings.llm_max_tokens,
-            },
+            temperature=settings.llm_temperature,
+            max_new_tokens=settings.llm_max_tokens,
         )
-
-        # Get structured output
-        structured_llm = llm.with_structured_output(GradeResult)
 
         # Grade each chunk
         graded_chunks = []
         total_confidence = 0.0
+
+        import json
+        import re
 
         for chunk in retrieved_chunks:
             # Format prompt with question and chunk content
@@ -96,7 +99,16 @@ def grader_node(state: "GraphState") -> "GraphState":
             )
 
             # Call LLM to grade the chunk
-            grade: GradeResult = structured_llm.invoke(prompt)
+            response = llm.invoke(prompt)
+
+            # Parse JSON response
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                parsed = json.loads(json_str)
+                grade = GradeResult(**parsed)
+            else:
+                grade = GradeResult(**json.loads(response))
 
             # Create GradedChunk
             graded_chunk = GradedChunk(
