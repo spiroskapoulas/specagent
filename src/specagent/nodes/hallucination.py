@@ -7,7 +7,10 @@ and identify any claims not supported by the retrieved context.
 
 from typing import TYPE_CHECKING, Literal
 
+from langchain_community.llms import HuggingFaceHub
 from pydantic import BaseModel, Field
+
+from specagent.config import settings
 
 if TYPE_CHECKING:
     from specagent.graph.state import GraphState
@@ -62,11 +65,111 @@ def hallucination_check_node(state: "GraphState") -> "GraphState":
     Returns:
         Updated state with hallucination_check result
     """
-    # TODO: Implement hallucination check logic
-    # 1. Get generation and source chunks from state
-    # 2. Format sources for comparison
-    # 3. Call LLM with structured output (HallucinationResult)
-    # 4. Update state["hallucination_check"]
-    # 5. If not grounded, optionally flag for regeneration
-    # 6. Return updated state
-    raise NotImplementedError("Hallucination check node not yet implemented")
+    # Get generation and graded chunks from state
+    generation = state.get("generation")
+    graded_chunks = state.get("graded_chunks", [])
+
+    # Handle case where generation is None or empty
+    if not generation or generation.strip() == "":
+        state["hallucination_check"] = "grounded"
+        state["ungrounded_claims"] = []
+        return state
+
+    # Get relevant chunks only
+    relevant_chunks = [
+        gc.chunk for gc in graded_chunks if gc.relevant == "yes"
+    ]
+
+    # Handle case where no relevant chunks are available
+    # If there's a generation but no sources, it's likely ungrounded
+    if not relevant_chunks:
+        try:
+            # Initialize HuggingFace LLM
+            llm = HuggingFaceHub(
+                repo_id=settings.llm_model,
+                huggingfacehub_api_token=settings.hf_api_key_value,
+                model_kwargs={
+                    "temperature": settings.llm_temperature,
+                    "max_new_tokens": settings.llm_max_tokens,
+                },
+            )
+
+            # Get structured output
+            structured_llm = llm.with_structured_output(HallucinationResult)
+
+            # Format prompt with empty sources
+            prompt = HALLUCINATION_PROMPT.format(
+                sources="(No source documents provided)",
+                answer=generation
+            )
+
+            # Call LLM to check for hallucinations
+            check_result: HallucinationResult = structured_llm.invoke(prompt)
+
+            # Map HallucinationResult.grounded to state hallucination_check values
+            if check_result.grounded == "yes":
+                state["hallucination_check"] = "grounded"
+            elif check_result.grounded == "no":
+                state["hallucination_check"] = "not_grounded"
+            else:  # partial
+                state["hallucination_check"] = "partial"
+
+            state["ungrounded_claims"] = check_result.ungrounded_claims
+
+        except Exception as e:
+            # Handle errors gracefully
+            state["error"] = f"Hallucination check error: {e!s}"
+            state["hallucination_check"] = "grounded"
+            state["ungrounded_claims"] = []
+
+        return state
+
+    try:
+        # Format chunks into sources string
+        source_parts = []
+        for chunk in relevant_chunks:
+            # Format: [TS XX.XXX §Y.Z]: content
+            source_ref = f"[TS {chunk.spec_id.replace('TS', '').replace('.', '.', 1)} §{chunk.section}]"
+            source_parts.append(f"{source_ref}: {chunk.content}")
+
+        sources = "\n\n".join(source_parts)
+
+        # Initialize HuggingFace LLM
+        llm = HuggingFaceHub(
+            repo_id=settings.llm_model,
+            huggingfacehub_api_token=settings.hf_api_key_value,
+            model_kwargs={
+                "temperature": settings.llm_temperature,
+                "max_new_tokens": settings.llm_max_tokens,
+            },
+        )
+
+        # Get structured output
+        structured_llm = llm.with_structured_output(HallucinationResult)
+
+        # Format prompt with sources and answer
+        prompt = HALLUCINATION_PROMPT.format(
+            sources=sources,
+            answer=generation
+        )
+
+        # Call LLM to check for hallucinations
+        result: HallucinationResult = structured_llm.invoke(prompt)
+
+        # Map HallucinationResult.grounded to state hallucination_check values
+        if result.grounded == "yes":
+            state["hallucination_check"] = "grounded"
+        elif result.grounded == "no":
+            state["hallucination_check"] = "not_grounded"
+        else:  # partial
+            state["hallucination_check"] = "partial"
+
+        state["ungrounded_claims"] = result.ungrounded_claims
+
+    except Exception as e:
+        # Handle errors gracefully
+        state["error"] = f"Hallucination check error: {e!s}"
+        state["hallucination_check"] = "grounded"
+        state["ungrounded_claims"] = []
+
+    return state
