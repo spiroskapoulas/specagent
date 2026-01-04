@@ -1,7 +1,12 @@
 """Unit tests for retrieval.chunker module."""
 
 import pytest
-from specagent.retrieval.chunker import Chunk, chunk_markdown
+from specagent.retrieval.chunker import (
+    Chunk,
+    chunk_markdown,
+    _extract_section_headers,
+    _find_nearest_header,
+)
 
 
 @pytest.mark.unit
@@ -145,6 +150,12 @@ Content at level 3.
             # Overlap larger than chunk_size should raise error
             chunk_markdown(text, chunk_size=100, overlap=150)
 
+    def test_negative_overlap_validation(self):
+        """Test that negative overlap raises ValueError."""
+        text = "Some content"
+        with pytest.raises(ValueError, match="overlap must be non-negative"):
+            chunk_markdown(text, chunk_size=100, overlap=-10)
+
     def test_special_characters_in_content(self):
         """Test handling of special characters."""
         text = """# Header with émojis 🚀
@@ -173,3 +184,85 @@ More text after code.
         # Code block content should be preserved somewhere
         full_content = "".join(chunk.content for chunk in chunks)
         assert "def hello()" in full_content or "hello" in full_content
+
+
+@pytest.mark.unit
+class TestExtractSectionHeaders:
+    """Tests for _extract_section_headers helper function."""
+
+    def test_extract_multiple_headers(self):
+        """Test extraction of multiple markdown headers."""
+        text = """# Header 1
+
+Content here.
+
+## Header 2
+
+More content.
+
+### Header 3
+
+Even more content.
+"""
+        headers = _extract_section_headers(text)
+
+        assert len(headers) == 3
+        assert "Header 1" in headers.values()
+        assert "Header 2" in headers.values()
+        assert "Header 3" in headers.values()
+
+    def test_extract_no_headers(self):
+        """Test extraction when no headers exist."""
+        text = "Just plain text with no headers."
+        headers = _extract_section_headers(text)
+
+        assert len(headers) == 0
+        assert headers == {}
+
+
+@pytest.mark.unit
+class TestFindNearestHeader:
+    """Tests for _find_nearest_header helper function."""
+
+    def test_chunk_not_found_in_full_text(self):
+        """Test handling when chunk content is not found in full text."""
+        chunk_content = "This chunk doesn't exist"
+        full_text = "Completely different text"
+        section_headers = {0: "Header"}
+
+        result = _find_nearest_header(chunk_content, full_text, section_headers)
+
+        # Should return empty string when chunk not found
+        assert result == ""
+
+    def test_no_headers_before_chunk(self):
+        """Test when there are no headers before the chunk position."""
+        # Create text where chunk appears before any headers
+        full_text = """Plain text at the beginning without any headers.
+
+# First Header
+
+Content after header.
+"""
+        chunk_content = "Plain text at the beginning"
+        # Extract headers - there's one header but it comes after our chunk
+        section_headers = _extract_section_headers(full_text)
+
+        result = _find_nearest_header(chunk_content, full_text, section_headers)
+
+        # Should return empty string when no headers precede the chunk
+        assert result == ""
+
+    def test_chunk_contains_header(self):
+        """Test when chunk itself contains a header."""
+        chunk_content = """# My Header
+
+Some content under the header.
+"""
+        full_text = chunk_content
+        section_headers = _extract_section_headers(full_text)
+
+        result = _find_nearest_header(chunk_content, full_text, section_headers)
+
+        # Should return the header contained in the chunk
+        assert result == "My Header"
