@@ -7,7 +7,6 @@ with metadata storage and persistence.
 
 import json
 from pathlib import Path
-from typing import Optional
 
 import faiss
 import numpy as np
@@ -31,7 +30,7 @@ class FAISSIndex:
         >>> index.save("data/index/faiss.index")
     """
 
-    def __init__(self, dimension: Optional[int] = None) -> None:
+    def __init__(self, dimension: int | None = None) -> None:
         """
         Initialize the FAISS index.
 
@@ -39,7 +38,7 @@ class FAISSIndex:
             dimension: Vector dimension (default from settings)
         """
         self.dimension = dimension or settings.embedding_dimension
-        self._index: Optional[faiss.IndexFlatIP] = None
+        self._index: faiss.IndexFlatIP | None = None
         self._chunks: list[Chunk] = []
 
     @property
@@ -52,7 +51,7 @@ class FAISSIndex:
         """Number of vectors in the index."""
         if self._index is None:
             return 0
-        return self._index.ntotal
+        return int(self._index.ntotal)
 
     def build(
         self,
@@ -106,7 +105,7 @@ class FAISSIndex:
         self,
         query_embedding: NDArray[np.float32],
         k: int = 10,
-        threshold: Optional[float] = None,
+        threshold: float | None = None,
     ) -> list[tuple[Chunk, float]]:
         """
         Search for similar chunks.
@@ -124,6 +123,9 @@ class FAISSIndex:
         """
         if not self.is_built:
             raise RuntimeError("Index has not been built. Call build() first.")
+
+        # Type narrowing: assert index is not None after is_built check
+        assert self._index is not None
 
         # Handle empty index
         if self.size == 0:
@@ -157,7 +159,7 @@ class FAISSIndex:
 
         return results
 
-    def save(self, path: Optional[str | Path] = None) -> None:
+    def save(self, path: str | Path | None = None) -> None:
         """
         Save index and metadata to disk.
 
@@ -169,6 +171,9 @@ class FAISSIndex:
         """
         if not self.is_built:
             raise RuntimeError("Index has not been built. Call build() first.")
+
+        # Type narrowing: assert index is not None after is_built check
+        assert self._index is not None
 
         # Use default path if not provided
         if path is None:
@@ -191,10 +196,10 @@ class FAISSIndex:
             for chunk in self._chunks
         ]
 
-        with open(metadata_file, 'w', encoding='utf-8') as f:
+        with metadata_file.open('w', encoding='utf-8') as f:
             json.dump(chunks_data, f, indent=2, ensure_ascii=False)
 
-    def load(self, path: Optional[str | Path] = None) -> None:
+    def load(self, path: str | Path | None = None) -> None:
         """
         Load index and metadata from disk.
 
@@ -222,7 +227,7 @@ class FAISSIndex:
         if not metadata_file.exists():
             raise FileNotFoundError(f"Metadata file not found: {metadata_file}")
 
-        with open(metadata_file, 'r', encoding='utf-8') as f:
+        with metadata_file.open(encoding='utf-8') as f:
             chunks_data = json.load(f)
 
         self._chunks = [
@@ -234,7 +239,7 @@ class FAISSIndex:
         ]
 
     @classmethod
-    def from_disk(cls, path: Optional[str | Path] = None) -> "FAISSIndex":
+    def from_disk(cls, path: str | Path | None = None) -> "FAISSIndex":
         """
         Create index instance from saved files.
 
@@ -261,4 +266,4 @@ class FAISSIndex:
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
         # Avoid division by zero
         norms = np.where(norms == 0, 1, norms)
-        return embeddings / norms
+        return (embeddings / norms).astype(np.float32)
