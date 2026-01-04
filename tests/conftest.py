@@ -216,17 +216,17 @@ def initial_graph_state(sample_question):
 def state_after_retrieval(initial_graph_state, sample_chunks):
     """Provide graph state after retrieval step."""
     from specagent.graph.state import RetrievedChunk
-    
+
     state = initial_graph_state.copy()
     state["route_decision"] = "retrieve"
     state["retrieved_chunks"] = [
         RetrievedChunk(
             content=chunk.content,
-            spec_id=chunk.spec_id,
-            section=chunk.section,
+            spec_id=chunk.metadata.get("source_file", "").replace(".md", "").replace("-", "."),
+            section=chunk.metadata.get("section_header", ""),
             similarity_score=0.85 - i * 0.1,
-            chunk_id=chunk.chunk_id,
-            source_file=chunk.source_file,
+            chunk_id=f"{chunk.metadata.get('source_file', 'unknown')}:{chunk.metadata.get('chunk_index', i)}",
+            source_file=chunk.metadata.get("source_file", ""),
         )
         for i, chunk in enumerate(sample_chunks[:3])
     ]
