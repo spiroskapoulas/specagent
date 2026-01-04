@@ -1,5 +1,7 @@
 """Unit tests for retrieval.indexer module."""
 
+from unittest.mock import patch
+
 import numpy as np
 import pytest
 
@@ -364,3 +366,107 @@ class TestFAISSIndex:
 
         assert index.is_built
         assert index.size == 3
+
+    def test_search_with_non_contiguous_query(self):
+        """Test that search works with non-contiguous query arrays."""
+        chunks = [
+            Chunk(content="test", metadata={"source_file": "test.md", "chunk_index": 0}),
+        ]
+        embeddings = np.random.rand(1, 384).astype(np.float32)
+
+        index = FAISSIndex(dimension=384)
+        index.build(chunks, embeddings)
+
+        query = np.random.rand(384).astype(np.float32)
+
+        # Mock _normalize_embeddings to return a guaranteed non-contiguous array
+        original_normalize = index._normalize_embeddings
+
+        def mock_normalize(emb):
+            # Call the original normalization
+            result = original_normalize(emb)
+            # Create a Fortran-ordered array (not C-contiguous)
+            fortran_array = np.asfortranarray(result)
+            # Verify it's not C-contiguous
+            if not fortran_array.flags['C_CONTIGUOUS']:
+                return fortran_array
+            # If that didn't work, create from a larger array slice
+            larger = np.zeros((3, result.shape[1]), dtype=np.float32, order='F')
+            larger[1] = result[0]
+            return larger[1:2, :]  # Slice of Fortran array is non-contiguous
+
+        with patch.object(index, '_normalize_embeddings', side_effect=mock_normalize):
+            results = index.search(query, k=1)
+
+        assert len(results) == 1
+        assert isinstance(results[0][0], Chunk)
+        assert isinstance(results[0][1], float)
+
+    def test_save_with_default_path(self, tmp_path, monkeypatch):
+        """Test save with default path from settings."""
+        chunks = [
+            Chunk(content="test", metadata={"source_file": "test.md", "chunk_index": 0}),
+        ]
+        embeddings = np.random.rand(1, 384).astype(np.float32)
+
+        # Mock settings to use tmp_path
+        from specagent import config
+        monkeypatch.setattr(config.settings, 'faiss_index_path', tmp_path / "default_index")
+
+        index = FAISSIndex(dimension=384)
+        index.build(chunks, embeddings)
+
+        # Call save without path argument
+        index.save()
+
+        # Verify files were created at default location
+        assert (tmp_path / "default_index.index").exists()
+        assert (tmp_path / "default_index.json").exists()
+
+    def test_load_with_default_path(self, tmp_path, monkeypatch):
+        """Test load with default path from settings."""
+        chunks = [
+            Chunk(content="test", metadata={"source_file": "test.md", "chunk_index": 0}),
+        ]
+        embeddings = np.random.rand(1, 384).astype(np.float32)
+
+        # Mock settings to use tmp_path
+        from specagent import config
+        save_path = tmp_path / "default_load_index"
+        monkeypatch.setattr(config.settings, 'faiss_index_path', save_path)
+
+        # Build and save
+        index1 = FAISSIndex(dimension=384)
+        index1.build(chunks, embeddings)
+        index1.save(save_path)
+
+        # Load using default path
+        index2 = FAISSIndex(dimension=384)
+        index2.load()
+
+        assert index2.is_built
+        assert index2.size == 1
+
+    def test_load_missing_metadata_file(self, tmp_path):
+        """Test that load raises error when metadata file is missing."""
+        chunks = [
+            Chunk(content="test", metadata={"source_file": "test.md", "chunk_index": 0}),
+        ]
+        embeddings = np.random.rand(1, 384).astype(np.float32)
+
+        # Save index
+        index1 = FAISSIndex(dimension=384)
+        index1.build(chunks, embeddings)
+        save_path = tmp_path / "incomplete_index"
+        index1.save(save_path)
+
+        # Delete metadata file
+        metadata_file = save_path.with_suffix('.json')
+        metadata_file.unlink()
+
+        # Try to load
+        index2 = FAISSIndex(dimension=384)
+        with pytest.raises(FileNotFoundError) as excinfo:
+            index2.load(save_path)
+
+        assert "Metadata file not found" in str(excinfo.value)
