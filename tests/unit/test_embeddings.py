@@ -380,3 +380,22 @@ class TestHuggingFaceEmbedder:
         # Check that vectors are normalized (L2 norm = 1)
         norm = np.linalg.norm(result[0])
         assert np.isclose(norm, 1.0, atol=1e-5)
+
+    def test_embed_batch_sync_runtime_error(self, httpx_mock: HTTPXMock, monkeypatch):
+        """Test RuntimeError edge case in _embed_batch_sync."""
+        embedder = HuggingFaceEmbedder(api_key="test-key")
+        # Set max_retries to 0 to skip the retry loop
+        monkeypatch.setattr(embedder, "max_retries", 0)
+
+        with pytest.raises(RuntimeError, match="Unexpected error in embed_batch_sync"):
+            embedder._embed_batch_sync(["test"])
+
+    @pytest.mark.asyncio
+    async def test_embed_batch_async_runtime_error(self, httpx_mock: HTTPXMock, monkeypatch):
+        """Test RuntimeError edge case in _embed_batch_async."""
+        embedder = HuggingFaceEmbedder(api_key="test-key")
+        # Set max_retries to 0 to skip the retry loop
+        monkeypatch.setattr(embedder, "max_retries", 0)
+
+        with pytest.raises(RuntimeError, match="Unexpected error in embed_batch_async"):
+            await embedder._embed_batch_async(["test"])
