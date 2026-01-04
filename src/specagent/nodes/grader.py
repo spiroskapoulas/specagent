@@ -32,7 +32,7 @@ class GradeResult(BaseModel):
     )
 
 
-GRADER_PROMPT = """You are a grader assessing relevance of a retrieved document chunk 
+GRADER_PROMPT = """You are a grader assessing relevance of a retrieved document chunk
 to a user question about 3GPP telecommunications specifications.
 
 Question: {question}
@@ -58,7 +58,7 @@ def grader_node(state: "GraphState") -> "GraphState":
     Returns:
         Updated state with graded_chunks containing relevance scores
     """
-    from specagent.graph.state import GradedChunk
+    from specagent.graph.state import GradedChunk  # noqa: PLC0415
 
     # Get question and retrieved chunks from state
     question = state.get("question", "")
@@ -118,7 +118,7 @@ def grader_node(state: "GraphState") -> "GraphState":
 
     except Exception as e:
         # Handle errors gracefully
-        state["error"] = f"Grader error: {str(e)}"
+        state["error"] = f"Grader error: {e!s}"
         state["graded_chunks"] = []
         state["average_confidence"] = 0.0
 
