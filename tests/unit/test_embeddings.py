@@ -1,6 +1,8 @@
 """Unit tests for retrieval.embeddings module."""
 
 import asyncio
+import json
+import time
 
 import httpx
 import numpy as np
@@ -122,8 +124,6 @@ class TestHuggingFaceEmbedder:
 
     def test_embed_texts_retry_exponential_backoff(self, httpx_mock: HTTPXMock, monkeypatch):
         """Test that retry uses exponential backoff."""
-        import time
-
         sleep_times = []
 
         def mock_sleep(seconds):
@@ -273,7 +273,6 @@ class TestHuggingFaceEmbedder:
         embedder.embed_texts(["test text"])
 
         request = httpx_mock.get_requests()[0]
-        import json
         body = json.loads(request.content)
         assert body["inputs"] == ["test text"]
 
@@ -290,3 +289,94 @@ class TestHuggingFaceEmbedder:
 
         request = httpx_mock.get_requests()[0]
         assert custom_model in str(request.url)
+
+    @pytest.mark.asyncio
+    async def test_aembed_texts_empty_list(self):
+        """Test async embedding an empty list."""
+        embedder = HuggingFaceEmbedder(api_key="test-key")
+        result = await embedder.aembed_texts([])
+
+        assert isinstance(result, np.ndarray)
+        assert result.shape == (0, 384)
+
+    @pytest.mark.asyncio
+    async def test_aembed_texts_max_retries_exceeded(self, httpx_mock: HTTPXMock):
+        """Test async max retries handling."""
+        # Return 429 for all retry attempts (max_retries = 3)
+        for _ in range(3):
+            httpx_mock.add_response(status_code=429)
+
+        embedder = HuggingFaceEmbedder(api_key="test-key")
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await embedder.aembed_texts(["test"])
+
+    @pytest.mark.asyncio
+    async def test_aembed_texts_http_error(self, httpx_mock: HTTPXMock):
+        """Test async handling of HTTP errors other than 429."""
+        httpx_mock.add_response(status_code=500, json={"error": "Internal server error"})
+
+        embedder = HuggingFaceEmbedder(api_key="test-key")
+
+        with pytest.raises(httpx.HTTPStatusError):
+            await embedder.aembed_texts(["test"])
+
+    @pytest.mark.asyncio
+    async def test_aembed_texts_network_error(self, httpx_mock: HTTPXMock):
+        """Test async handling of network errors."""
+        httpx_mock.add_exception(httpx.ConnectError("Connection failed"))
+
+        embedder = HuggingFaceEmbedder(api_key="test-key")
+
+        with pytest.raises(httpx.ConnectError):
+            await embedder.aembed_texts(["test"])
+
+    @pytest.mark.asyncio
+    async def test_aembed_texts_exponential_backoff(self, httpx_mock: HTTPXMock, monkeypatch):
+        """Test async retry uses exponential backoff."""
+        sleep_times = []
+
+        async def mock_sleep(seconds):
+            sleep_times.append(seconds)
+
+        monkeypatch.setattr(asyncio, "sleep", mock_sleep)
+
+        # Return 429 twice, then succeed
+        httpx_mock.add_response(status_code=429)
+        httpx_mock.add_response(status_code=429)
+        httpx_mock.add_response(json=[[0.1] * 384])
+
+        embedder = HuggingFaceEmbedder(api_key="test-key")
+        result = await embedder.aembed_texts(["test"])
+
+        # Should have slept with exponential backoff
+        assert len(sleep_times) == 2
+        # Second sleep should be longer than first (exponential backoff)
+        assert sleep_times[1] > sleep_times[0]
+        assert result.shape == (1, 384)
+
+    def test_normalize_zero_vector(self, httpx_mock: HTTPXMock):
+        """Test normalization handles zero vectors."""
+        mock_embedding = [[0.0] * 384]  # All zeros
+        httpx_mock.add_response(json=mock_embedding)
+
+        embedder = HuggingFaceEmbedder(api_key="test-key")
+        result = embedder.embed_texts(["test"])
+
+        # Should not raise, should return zero vector unchanged
+        assert result.shape == (1, 384)
+        assert np.allclose(result[0], 0.0)
+
+    @pytest.mark.asyncio
+    async def test_aembed_texts_normalization(self, httpx_mock: HTTPXMock):
+        """Test async embeddings are normalized."""
+        # Mock unnormalized embeddings
+        mock_embedding = [[3.0, 4.0] + [0.0] * 382]  # Length = 5 before normalization
+        httpx_mock.add_response(json=mock_embedding)
+
+        embedder = HuggingFaceEmbedder(api_key="test-key")
+        result = await embedder.aembed_texts(["test"])
+
+        # Check that vectors are normalized (L2 norm = 1)
+        norm = np.linalg.norm(result[0])
+        assert np.isclose(norm, 1.0, atol=1e-5)

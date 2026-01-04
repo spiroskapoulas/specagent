@@ -7,7 +7,6 @@ for document chunks and queries.
 
 import asyncio
 import time
-from typing import Optional
 
 import httpx
 import numpy as np
@@ -31,8 +30,8 @@ class HuggingFaceEmbedder:
 
     def __init__(
         self,
-        model: Optional[str] = None,
-        api_key: Optional[str] = None,
+        model: str | None = None,
+        api_key: str | None = None,
         batch_size: int = 32,
     ) -> None:
         """
@@ -228,7 +227,7 @@ class HuggingFaceEmbedder:
         norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
         # Avoid division by zero
         norms = np.where(norms == 0, 1, norms)
-        return embeddings / norms
+        return (embeddings / norms).astype(np.float32)
 
     def embed_query(self, query: str) -> NDArray[np.float32]:
         """
@@ -241,4 +240,5 @@ class HuggingFaceEmbedder:
             Array of shape (embedding_dimension,)
         """
         result = self.embed_texts([query])
-        return result[0]
+        embedding: NDArray[np.float32] = result[0]
+        return embedding
