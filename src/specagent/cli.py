@@ -93,15 +93,61 @@ def index(
     data_dir: str = typer.Option("data/raw", help="Directory with markdown files"),
     output_dir: str = typer.Option("data/index", help="Directory for index files"),
     force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if exists"),
+    download: bool = typer.Option(False, "--download", "-d", help="Download specs from HuggingFace (requires license acceptance)"),
+    use_git: bool = typer.Option(False, "--use-git", help="Use git clone instead of HTTP download"),
 ) -> None:
     """Build or update the FAISS index."""
     from pathlib import Path
 
+    import numpy as np
+
+    from specagent.config import settings
+    from specagent.retrieval.chunker import chunk_markdown
+    from specagent.retrieval.data_ingestion import (
+        clone_dataset_with_git_lfs,
+        discover_markdown_files,
+        download_38_series_specs,
+    )
+    from specagent.retrieval.embeddings import LocalEmbedder
+    from specagent.retrieval.indexer import FAISSIndex
+
     data_path = Path(data_dir)
     output_path = Path(output_dir)
 
+    # Download files if requested
+    if download:
+        console.print("[cyan]Downloading specifications from HuggingFace...[/cyan]")
+        console.print("[yellow]⚠ This dataset is GATED and requires license acceptance![/yellow]")
+        console.print("[dim]1. Visit: https://huggingface.co/datasets/rasoul-nikbakht/TSpec-LLM[/dim]")
+        console.print("[dim]2. Log in and accept the CC-BY-NC-4.0 license[/dim]")
+        console.print("[dim]3. Make sure your HF_API_KEY has access to this dataset[/dim]\n")
+
+        try:
+            if use_git:
+                console.print("[cyan]Using git clone method...[/cyan]")
+                downloaded = clone_dataset_with_git_lfs(data_path)
+            else:
+                downloaded = download_38_series_specs(data_path)
+
+            if not downloaded:
+                console.print("[red]No files downloaded. Exiting.[/red]")
+                console.print("[yellow]If you're getting 401 errors, you may need to:[/yellow]")
+                console.print("  1. Accept the dataset license on HuggingFace")
+                console.print("  2. Use --use-git flag to clone with git credentials")
+                console.print("  3. Or manually download files to data/raw/ and run without --download")
+                raise typer.Exit(1)
+        except Exception as e:
+            console.print(f"[red]Download failed: {e}[/red]")
+            console.print("\n[yellow]Alternative: Manually download the dataset:[/yellow]")
+            console.print("  git clone https://huggingface.co/datasets/rasoul-nikbakht/TSpec-LLM")
+            console.print("  cp TSpec-LLM/3GPP-clean/Rel-18/38_series/*.md data/raw/")
+            console.print("  specagent index --force")
+            raise typer.Exit(1)
+
+    # Validate data directory exists
     if not data_path.exists():
         console.print(f"[red]Data directory not found: {data_path}[/red]")
+        console.print("Use --download to fetch specifications from HuggingFace.")
         raise typer.Exit(1)
 
     output_path.mkdir(parents=True, exist_ok=True)
@@ -112,16 +158,90 @@ def index(
         console.print("Use --force to rebuild.")
         return
 
-    console.print(f"[blue]Building index from {data_path}...[/blue]")
+    console.print(f"[blue]Building index from {data_path}...[/blue]\n")
 
-    # TODO: Implement index building
-    # 1. Load markdown files
-    # 2. Chunk documents
-    # 3. Generate embeddings
-    # 4. Build FAISS index
-    # 5. Save to output directory
+    # Step 1: Load markdown files
+    console.print("[cyan]Step 1: Discovering markdown files...[/cyan]")
+    md_files = discover_markdown_files(data_path)
+    if not md_files:
+        console.print(f"[red]No markdown files found in {data_path}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]Found {len(md_files)} markdown files[/green]\n")
 
-    console.print("[red]Index building not yet implemented.[/red]")
+    # Step 2: Chunk documents
+    console.print("[cyan]Step 2: Chunking documents...[/cyan]")
+    file_chunks_map = []  # List of (md_file, chunks) tuples
+    total_chars = 0
+
+    with console.status("[bold green]Chunking...") as status:
+        for md_file in md_files:
+            status.update(f"[bold green]Chunking {md_file.name}...")
+
+            text = md_file.read_text(encoding="utf-8")
+            total_chars += len(text)
+
+            chunks = chunk_markdown(
+                text=text,
+                chunk_size=settings.chunk_size,
+                overlap=settings.chunk_overlap,
+            )
+
+            # Update source_file metadata
+            for chunk in chunks:
+                chunk.metadata["source_file"] = md_file.name
+
+            file_chunks_map.append((md_file, chunks))
+            console.print(f"[green]  ✓ {md_file.name}: {len(chunks)} chunks ({len(text):,} chars)[/green]")
+
+    total_chunks = sum(len(chunks) for _, chunks in file_chunks_map)
+    console.print(f"[green]Created {total_chunks} chunks from {total_chars:,} characters[/green]\n")
+
+    # Step 3: Generate embeddings
+    console.print("[cyan]Step 3: Generating embeddings...[/cyan]")
+    console.print(f"[dim]Using model: {settings.embedding_model} (local)[/dim]\n")
+
+    embedder = LocalEmbedder()
+    all_chunks = []
+    all_embeddings = []
+
+    for idx, (md_file, chunks) in enumerate(file_chunks_map, 1):
+        console.print(f"[blue]({idx}/{len(file_chunks_map)}) Embedding {md_file.name}[/blue] - {len(chunks)} chunks")
+
+        chunk_texts = [chunk.content for chunk in chunks]
+        embeddings = embedder.embed_texts(chunk_texts)
+
+        all_chunks.extend(chunks)
+        all_embeddings.append(embeddings)
+
+        console.print(f"[green]  ✓ Generated {len(embeddings)} embeddings[/green]\n")
+
+    embeddings = np.vstack(all_embeddings)
+    console.print(f"[green]Total: {len(embeddings)} embeddings with dimension {embeddings.shape[1]}[/green]\n")
+
+    # Step 4: Build FAISS index
+    console.print("[cyan]Step 4: Building FAISS index...[/cyan]")
+    faiss_index = FAISSIndex(dimension=settings.embedding_dimension)
+
+    with console.status("[bold green]Building index..."):
+        faiss_index.build(all_chunks, embeddings)
+
+    console.print(f"[green]Built index with {faiss_index.size} vectors[/green]\n")
+
+    # Step 5: Save to output directory
+    console.print("[cyan]Step 5: Saving index...[/cyan]")
+    index_path = output_path / "faiss"
+
+    with console.status(f"[bold green]Saving to {index_path}..."):
+        faiss_index.save(index_path)
+
+    console.print(f"[green]Saved index to {index_path}.index and {index_path}.json[/green]\n")
+
+    # Summary
+    console.print("[bold green]✓ Index building complete![/bold green]")
+    console.print(f"  Files processed: {len(md_files)}")
+    console.print(f"  Total chunks: {len(all_chunks)}")
+    console.print(f"  Index size: {faiss_index.size} vectors")
+    console.print(f"  Output: {index_path}.{{index,json}}")
 
 
 @app.command()

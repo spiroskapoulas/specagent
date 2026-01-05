@@ -15,6 +15,83 @@ from numpy.typing import NDArray
 from specagent.config import settings
 
 
+class LocalEmbedder:
+    """
+    Generate embeddings using local sentence-transformers model.
+
+    Uses the sentence-transformers library to generate embeddings locally
+    without requiring API calls.
+
+    Example:
+        >>> embedder = LocalEmbedder()
+        >>> vectors = embedder.embed_texts(["What is 5G NR?"])
+        >>> vectors.shape
+        (1, 384)
+    """
+
+    def __init__(
+        self,
+        model: str | None = None,
+        batch_size: int = 32,
+        show_progress: bool = True,
+    ) -> None:
+        """
+        Initialize the embedder.
+
+        Args:
+            model: Sentence transformer model ID (default from settings)
+            batch_size: Number of texts per batch
+            show_progress: Whether to show progress bar during encoding
+        """
+        from sentence_transformers import SentenceTransformer
+
+        self.model_name = model or settings.embedding_model
+        self.batch_size = batch_size
+        self.dimension = settings.embedding_dimension
+        self.show_progress = show_progress
+
+        # Load the model
+        self.model = SentenceTransformer(self.model_name)
+
+    def embed_texts(self, texts: list[str]) -> NDArray[np.float32]:
+        """
+        Generate embeddings for a list of texts.
+
+        Args:
+            texts: List of texts to embed
+
+        Returns:
+            Array of shape (len(texts), embedding_dimension)
+        """
+        if not texts:
+            return np.empty((0, self.dimension), dtype=np.float32)
+
+        # Generate embeddings
+        embeddings = self.model.encode(
+            texts,
+            batch_size=self.batch_size,
+            show_progress_bar=self.show_progress,
+            convert_to_numpy=True,
+            normalize_embeddings=True,  # L2 normalization for cosine similarity
+        )
+
+        return embeddings.astype(np.float32)
+
+    def embed_query(self, query: str) -> NDArray[np.float32]:
+        """
+        Generate embedding for a single query.
+
+        Args:
+            query: Query text
+
+        Returns:
+            Array of shape (embedding_dimension,)
+        """
+        result = self.embed_texts([query])
+        embedding: NDArray[np.float32] = result[0]
+        return embedding
+
+
 class HuggingFaceEmbedder:
     """
     Generate embeddings using HuggingFace Inference API.
