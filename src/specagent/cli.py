@@ -168,55 +168,58 @@ def index(
         raise typer.Exit(1)
     console.print(f"[green]Found {len(md_files)} markdown files[/green]\n")
 
-    # Step 2: Chunk documents
-    console.print("[cyan]Step 2: Chunking documents...[/cyan]")
-    file_chunks_map = []  # List of (md_file, chunks) tuples
-    total_chars = 0
-
-    with console.status("[bold green]Chunking...") as status:
-        for md_file in md_files:
-            status.update(f"[bold green]Chunking {md_file.name}...")
-
-            text = md_file.read_text(encoding="utf-8")
-            total_chars += len(text)
-
-            chunks = chunk_markdown(
-                text=text,
-                chunk_size=settings.chunk_size,
-                overlap=settings.chunk_overlap,
-            )
-
-            # Update source_file metadata
-            for chunk in chunks:
-                chunk.metadata["source_file"] = md_file.name
-
-            file_chunks_map.append((md_file, chunks))
-            console.print(f"[green]  ✓ {md_file.name}: {len(chunks)} chunks ({len(text):,} chars)[/green]")
-
-    total_chunks = sum(len(chunks) for _, chunks in file_chunks_map)
-    console.print(f"[green]Created {total_chunks} chunks from {total_chars:,} characters[/green]\n")
-
-    # Step 3: Generate embeddings
-    console.print("[cyan]Step 3: Generating embeddings...[/cyan]")
-    console.print(f"[dim]Using model: {settings.embedding_model} (local)[/dim]\n")
-
+    # Step 2: Initialize embedder (load model once)
+    console.print("[cyan]Step 2: Loading embedding model...[/cyan]")
+    console.print(f"[dim]Using model: {settings.embedding_model} (local)[/dim]")
     embedder = LocalEmbedder()
+    console.print(f"[green]Model loaded successfully[/green]\n")
+
+    # Step 3: Process documents one-by-one (chunk + embed immediately)
+    console.print("[cyan]Step 3: Processing documents (chunk + embed)...[/cyan]")
+    console.print(f"[dim]Memory-efficient pipeline: chunk → embed → next document[/dim]\n")
+
     all_chunks = []
     all_embeddings = []
+    total_chars = 0
 
-    for idx, (md_file, chunks) in enumerate(file_chunks_map, 1):
-        console.print(f"[blue]({idx}/{len(file_chunks_map)}) Embedding {md_file.name}[/blue] - {len(chunks)} chunks")
+    for idx, md_file in enumerate(md_files, 1):
+        console.print(f"[blue]({idx}/{len(md_files)}) Processing {md_file.name}[/blue]")
 
+        # Read and chunk document
+        text = md_file.read_text(encoding="utf-8")
+        total_chars += len(text)
+
+        chunks = chunk_markdown(
+            text=text,
+            chunk_size=settings.chunk_size,
+            overlap=settings.chunk_overlap,
+        )
+
+        # Update source_file metadata
+        for chunk in chunks:
+            chunk.metadata["source_file"] = md_file.name
+
+        console.print(f"[dim]  • Chunked: {len(chunks)} chunks ({len(text):,} chars)[/dim]")
+
+        # Embed immediately (while chunks are hot in memory)
         chunk_texts = [chunk.content for chunk in chunks]
         embeddings = embedder.embed_texts(chunk_texts)
 
+        console.print(f"[dim]  • Embedded: {len(embeddings)} vectors (dim={embeddings.shape[1]})[/dim]")
+
+        # Store results
         all_chunks.extend(chunks)
         all_embeddings.append(embeddings)
 
-        console.print(f"[green]  ✓ Generated {len(embeddings)} embeddings[/green]\n")
+        # Explicitly release memory to help garbage collector
+        del text, chunk_texts
 
+        console.print(f"[green]  ✓ Complete ({len(chunks)} chunks, {len(embeddings)} embeddings)[/green]\n")
+
+    # Combine all embeddings efficiently
     embeddings = np.vstack(all_embeddings)
-    console.print(f"[green]Total: {len(embeddings)} embeddings with dimension {embeddings.shape[1]}[/green]\n")
+    console.print(f"[green]Processed {len(md_files)} files: {len(all_chunks)} chunks from {total_chars:,} characters[/green]")
+    console.print(f"[green]Total embeddings: {len(embeddings)} vectors with dimension {embeddings.shape[1]}[/green]\n")
 
     # Step 4: Build FAISS index
     console.print("[cyan]Step 4: Building FAISS index...[/cyan]")
