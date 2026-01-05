@@ -10,10 +10,9 @@ Uses structured output from LLM to get routing decision with reasoning.
 
 from typing import TYPE_CHECKING, Literal
 
-from langchain_huggingface import HuggingFaceEndpoint
 from pydantic import BaseModel, Field
 
-from specagent.config import settings
+from specagent.llm import create_llm
 
 if TYPE_CHECKING:
     from specagent.graph.state import GraphState
@@ -61,13 +60,8 @@ def router_node(state: "GraphState") -> "GraphState":
     question = state.get("question", "")
 
     try:
-        # Initialize HuggingFace LLM
-        llm = HuggingFaceEndpoint(
-            repo_id=settings.llm_model,
-            huggingfacehub_api_token=settings.hf_api_key_value,
-            temperature=settings.llm_temperature,
-            max_new_tokens=settings.llm_max_tokens,
-        )
+        # Initialize LLM (auto-selects based on config)
+        llm = create_llm()
 
         # Format prompt with question
         prompt = ROUTER_PROMPT.format(question=question)

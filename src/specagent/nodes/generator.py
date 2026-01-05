@@ -8,9 +8,7 @@ with inline citations in the format [TS XX.XXX §Y.Z].
 import re
 from typing import TYPE_CHECKING
 
-from langchain_huggingface import HuggingFaceEndpoint
-
-from specagent.config import settings
+from specagent.llm import create_llm
 
 if TYPE_CHECKING:
     from specagent.graph.state import GraphState
@@ -85,13 +83,8 @@ def generator_node(state: "GraphState") -> "GraphState":
 
         context = "\n\n".join(context_parts)
 
-        # Initialize HuggingFace LLM
-        llm = HuggingFaceEndpoint(
-            repo_id=settings.llm_model,
-            huggingfacehub_api_token=settings.hf_api_key_value,
-            temperature=settings.llm_temperature,
-            max_new_tokens=settings.llm_max_tokens,
-        )
+        # Initialize LLM (auto-selects based on config)
+        llm = create_llm()
 
         # Format prompt with question and context
         prompt = GENERATOR_PROMPT.format(

@@ -55,11 +55,19 @@ class Settings(BaseSettings):
         default=True,
         description="Use local sentence-transformers instead of HF API",
     )
-    
+
     # LLM Configuration
     use_local_llm: bool = Field(
         default=False,
         description="Use local GGUF model instead of HF Inference API",
+    )
+    use_custom_endpoint: bool = Field(
+        default=True,
+        description="Use custom OpenAI-compatible endpoint instead of HuggingFace",
+    )
+    custom_endpoint_url: str = Field(
+        default="http://qwen3-4b-predictor.ml-serving.10.0.1.2.sslip.io:30750/v1/chat/completions",
+        description="Custom inference endpoint URL (OpenAI-compatible)",
     )
     
     # HuggingFace Inference API (when use_local_llm=False)
