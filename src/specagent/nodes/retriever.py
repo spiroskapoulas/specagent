@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from specagent.config import settings
 from specagent.graph.state import RetrievedChunk
-from specagent.retrieval.embeddings import HuggingFaceEmbedder
+from specagent.retrieval.embeddings import HuggingFaceEmbedder, LocalEmbedder
 from specagent.retrieval.indexer import FAISSIndex
 
 if TYPE_CHECKING:
@@ -36,11 +36,15 @@ def retriever_node(state: "GraphState") -> "GraphState":
         return state
 
     try:
-        # Initialize embedder
-        embedder = HuggingFaceEmbedder()
-
-        # Embed query asynchronously
-        query_embedding = asyncio.run(embedder.aembed_texts([query]))[0]
+        # Initialize embedder based on config
+        if settings.use_local_embeddings:
+            embedder = LocalEmbedder()
+            # Use synchronous method for local embeddings
+            query_embedding = embedder.embed_query(query)
+        else:
+            embedder = HuggingFaceEmbedder()
+            # Embed query asynchronously for HF API
+            query_embedding = asyncio.run(embedder.aembed_texts([query]))[0]
 
         # Load FAISS index from disk
         index = FAISSIndex()

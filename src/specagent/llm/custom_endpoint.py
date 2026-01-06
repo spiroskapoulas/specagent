@@ -6,9 +6,13 @@ the OpenAI chat completions API format.
 """
 
 import json
+import logging
+import time
 from typing import Optional
 
 import requests
+
+logger = logging.getLogger(__name__)
 
 
 class CustomEndpointLLM:
@@ -19,7 +23,9 @@ class CustomEndpointLLM:
         endpoint_url: str,
         temperature: float = 0.1,
         max_tokens: int = 1024,
-        timeout: int = 30,
+        timeout: int = 120,  # Increased from 30s to 120s for slow LLMs
+        max_retries: int = 3,  # Retry for serverless cold starts
+        retry_delay: float = 2.0,  # Initial retry delay in seconds
     ):
         """
         Initialize custom endpoint client.
@@ -29,15 +35,22 @@ class CustomEndpointLLM:
             temperature: Sampling temperature (0.0 to 2.0)
             max_tokens: Maximum tokens to generate
             timeout: Request timeout in seconds
+            max_retries: Maximum number of retry attempts for 502/503 errors
+            retry_delay: Initial delay between retries (uses exponential backoff)
         """
         self.endpoint_url = endpoint_url
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.timeout = timeout
+        self.max_retries = max_retries
+        self.retry_delay = retry_delay
 
     def invoke(self, prompt: str) -> str:
         """
         Call the LLM with a prompt.
+
+        Implements retry logic with exponential backoff for serverless endpoints
+        that may return 502/503 errors during cold starts.
 
         Args:
             prompt: The input prompt text
@@ -46,7 +59,7 @@ class CustomEndpointLLM:
             The generated response text
 
         Raises:
-            requests.HTTPError: If the API request fails
+            requests.HTTPError: If the API request fails after all retries
         """
         payload = {
             "messages": [{"role": "user", "content": prompt}],
@@ -54,13 +67,48 @@ class CustomEndpointLLM:
             "max_tokens": self.max_tokens,
         }
 
-        response = requests.post(
-            self.endpoint_url, json=payload, timeout=self.timeout
-        )
-        response.raise_for_status()
+        last_exception = None
+        for attempt in range(self.max_retries):
+            try:
+                response = requests.post(
+                    self.endpoint_url, json=payload, timeout=self.timeout
+                )
+                response.raise_for_status()
 
-        result = response.json()
-        return result["choices"][0]["message"]["content"]
+                result = response.json()
+                return result["choices"][0]["message"]["content"]
+
+            except requests.HTTPError as e:
+                last_exception = e
+                # Retry on 502/503 (Bad Gateway/Service Unavailable) for serverless cold starts
+                if e.response.status_code in (502, 503, 504):
+                    if attempt < self.max_retries - 1:
+                        delay = self.retry_delay * (2 ** attempt)  # Exponential backoff
+                        logger.warning(
+                            f"Endpoint returned {e.response.status_code}, "
+                            f"retrying in {delay:.1f}s (attempt {attempt + 1}/{self.max_retries})"
+                        )
+                        time.sleep(delay)
+                        continue
+                # For other errors or last attempt, re-raise
+                raise
+
+            except (requests.Timeout, requests.ConnectionError) as e:
+                last_exception = e
+                if attempt < self.max_retries - 1:
+                    delay = self.retry_delay * (2 ** attempt)
+                    logger.warning(
+                        f"Connection error: {str(e)}, "
+                        f"retrying in {delay:.1f}s (attempt {attempt + 1}/{self.max_retries})"
+                    )
+                    time.sleep(delay)
+                    continue
+                raise
+
+        # If we get here, all retries failed
+        if last_exception:
+            raise last_exception
+        raise RuntimeError("All retry attempts failed")
 
 
 def create_custom_llm(
