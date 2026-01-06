@@ -90,7 +90,7 @@ def query(
 
 @app.command()
 def index(
-    data_dir: str = typer.Option("data/raw", help="Directory with markdown files"),
+    data_dir: str = typer.Option("data", help="Directory with markdown files (searches recursively)"),
     output_dir: str = typer.Option("data/index", help="Directory for index files"),
     force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if exists"),
     download: bool = typer.Option(False, "--download", "-d", help="Download specs from HuggingFace (requires license acceptance)"),
@@ -106,7 +106,7 @@ def index(
     from specagent.retrieval.data_ingestion import (
         clone_dataset_with_git_lfs,
         discover_markdown_files,
-        download_38_series_specs,
+        download_all_required_specs,
     )
     from specagent.retrieval.embeddings import LocalEmbedder
     from specagent.retrieval.indexer import FAISSIndex
@@ -125,22 +125,28 @@ def index(
         try:
             if use_git:
                 console.print("[cyan]Using git clone method...[/cyan]")
-                downloaded = clone_dataset_with_git_lfs(data_path)
+                console.print("[yellow]Note: Git clone downloads Rel-18 specs only.[/yellow]")
+                console.print("[yellow]For full multi-release support, use HTTP download (without --use-git).[/yellow]\n")
+                downloaded = clone_dataset_with_git_lfs(data_path / "raw")
+                if not downloaded:
+                    raise ValueError("Git clone returned no files")
             else:
-                downloaded = download_38_series_specs(data_path)
+                # Download all required specifications (Rel-15, 16, 17)
+                result = download_all_required_specs(base_dir=data_path)
+                total_files = sum(len(files) for files in result.values())
+                if total_files == 0:
+                    raise ValueError("HTTP download returned no files")
 
-            if not downloaded:
-                console.print("[red]No files downloaded. Exiting.[/red]")
-                console.print("[yellow]If you're getting 401 errors, you may need to:[/yellow]")
-                console.print("  1. Accept the dataset license on HuggingFace")
-                console.print("  2. Use --use-git flag to clone with git credentials")
-                console.print("  3. Or manually download files to data/raw/ and run without --download")
-                raise typer.Exit(1)
+            console.print("[green]Download completed successfully![/green]\n")
         except Exception as e:
             console.print(f"[red]Download failed: {e}[/red]")
+            console.print("\n[yellow]If you're getting 401 errors, you may need to:[/yellow]")
+            console.print("  1. Accept the dataset license on HuggingFace")
+            console.print("  2. Set HF_API_KEY environment variable")
+            console.print("  3. Or manually download files to data/ subdirectories")
             console.print("\n[yellow]Alternative: Manually download the dataset:[/yellow]")
             console.print("  git clone https://huggingface.co/datasets/rasoul-nikbakht/TSpec-LLM")
-            console.print("  cp TSpec-LLM/3GPP-clean/Rel-18/38_series/*.md data/raw/")
+            console.print("  cp TSpec-LLM/3GPP-clean/Rel-17/38_series/*.md data/raw_rel_17_38_series/")
             console.print("  specagent index --force")
             raise typer.Exit(1)
 

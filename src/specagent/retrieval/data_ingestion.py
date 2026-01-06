@@ -153,15 +153,20 @@ def download_38_series_specs(
 
 def discover_markdown_files(data_dir: Path) -> list[Path]:
     """
-    Discover all markdown files in a directory.
+    Discover all markdown files in a directory and its subdirectories.
+
+    Searches recursively for .md files, which allows it to find specs in:
+    - data/raw/*.md (legacy flat structure)
+    - data/raw_rel_*/*.md (new multi-release structure)
+    - Any subdirectories under data_dir
 
     Args:
         data_dir: Directory to search
 
     Returns:
-        List of markdown file paths
+        List of markdown file paths, sorted alphabetically
     """
-    md_files = list(data_dir.glob("*.md"))
+    md_files = list(data_dir.glob("**/*.md"))
     md_files.sort()
     return md_files
 
