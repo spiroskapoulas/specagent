@@ -8,6 +8,7 @@ Or use the CLI:
     specagent serve
 """
 
+import logging
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -22,6 +23,9 @@ from specagent.api.models import (
 )
 from specagent.config import settings
 from specagent.graph.workflow import run_query
+from specagent.retrieval.resources import initialize_resources
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -30,20 +34,34 @@ async def lifespan(app: FastAPI):
     Application lifespan handler.
 
     Startup:
-        - Load FAISS index
-        - Initialize tracing
+        - Load FAISS index into memory (cached)
+        - Initialize embedder model (cached)
+        - Initialize tracing if enabled
 
     Shutdown:
-        - Cleanup resources
+        - Resources cleaned up on process exit
     """
     # Startup
-    # TODO: Load FAISS index into memory
+    logger.info("Initializing SpecAgent resources...")
+
+    try:
+        status = initialize_resources()
+        logger.info(f"Resource initialization status: {status}")
+        logger.info("FAISS index loaded successfully")
+        logger.info("Embedder initialized successfully")
+    except Exception as e:
+        logger.error(f"Failed to initialize resources: {e}")
+        raise RuntimeError(f"Startup failed: {e}") from e
+
     # TODO: Initialize Phoenix tracing if enabled
+    if settings.enable_tracing:
+        logger.info("Tracing enabled but not yet implemented")
 
     yield
 
     # Shutdown
-    # TODO: Cleanup resources
+    logger.info("Shutting down SpecAgent...")
+    # Resources persist until process exit (@lru_cache lifetime)
 
 
 def create_app() -> FastAPI:
@@ -91,10 +109,18 @@ async def health_check() -> HealthResponse:
     Returns:
         Health status and basic metrics
     """
+    from specagent.retrieval.resources import get_faiss_index
+
+    try:
+        index = get_faiss_index()
+        index_loaded = index.is_built
+    except Exception:
+        index_loaded = False
+
     return HealthResponse(
         status="healthy",
         version="0.1.0",
-        index_loaded=False,  # TODO: Check actual index status
+        index_loaded=index_loaded,  # Real status
     )
 
 

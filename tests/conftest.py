@@ -16,6 +16,8 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
+from specagent.retrieval.resources import clear_resource_cache
+
 
 # =============================================================================
 # Configuration Fixtures
@@ -37,6 +39,19 @@ def mock_settings():
     ):
         from specagent.config import Settings
         yield Settings()
+
+
+@pytest.fixture(autouse=True)
+def reset_resource_cache():
+    """
+    Automatically clear resource cache before each test.
+
+    Ensures tests don't interfere with each other by
+    sharing cached index/embedder instances.
+    """
+    clear_resource_cache()
+    yield
+    clear_resource_cache()
 
 
 # =============================================================================

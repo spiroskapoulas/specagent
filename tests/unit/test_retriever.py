@@ -23,27 +23,27 @@ def test_retriever_node_with_query(sample_chunks, sample_embeddings, tmp_index_d
     from specagent.nodes.retriever import retriever_node
     from specagent.retrieval.indexer import FAISSIndex
 
-    # Build and save index
-    index = FAISSIndex()
-    index.build(sample_chunks, sample_embeddings)
-    index_path = tmp_index_dir / "faiss.index"
-    index.save(index_path)
+    # Build real index for testing
+    real_index = FAISSIndex()
+    real_index.build(sample_chunks, sample_embeddings)
 
     # Create state with a question
     state: GraphState = create_initial_state("What is HARQ in NR?")
 
-    # Mock the embedder
+    # Mock the embedder and index getters
     mock_query_embedding = sample_embeddings[0:1]  # aembed_texts returns array
 
-    with patch("specagent.nodes.retriever.HuggingFaceEmbedder") as MockEmbedder:
-        mock_embedder = MockEmbedder.return_value
-        mock_embedder.aembed_texts = AsyncMock(return_value=mock_query_embedding)
+    with patch("specagent.config.settings.use_local_embeddings", False):
+        with patch("specagent.nodes.retriever.get_hf_embedder") as mock_get_embedder:
+            mock_embedder = MagicMock()
+            mock_embedder.aembed_texts = AsyncMock(return_value=mock_query_embedding)
+            mock_get_embedder.return_value = mock_embedder
 
-        with patch("specagent.config.settings") as mock_settings:
-            mock_settings.faiss_index_path = str(index_path)
+            with patch("specagent.nodes.retriever.get_faiss_index") as mock_get_index:
+                mock_get_index.return_value = real_index
 
-            # Run retriever node
-            result_state = retriever_node(state)
+                # Run retriever node
+                result_state = retriever_node(state)
 
     # Verify state was updated with retrieved chunks
     assert "retrieved_chunks" in result_state
@@ -75,28 +75,28 @@ def test_retriever_node_with_rewritten_question(
     from specagent.nodes.retriever import retriever_node
     from specagent.retrieval.indexer import FAISSIndex
 
-    # Build and save index
-    index = FAISSIndex()
-    index.build(sample_chunks, sample_embeddings)
-    index_path = tmp_index_dir / "faiss.index"
-    index.save(index_path)
+    # Build real index for testing
+    real_index = FAISSIndex()
+    real_index.build(sample_chunks, sample_embeddings)
 
     # Create state with both question and rewritten_question
     state: GraphState = create_initial_state("HARQ in NR?")
     state["rewritten_question"] = "What is the HARQ process in 5G NR Release 18?"
 
-    # Mock the embedder
+    # Mock the embedder and index getters
     mock_query_embedding = sample_embeddings[0:1]  # aembed_texts returns array
 
-    with patch("specagent.nodes.retriever.HuggingFaceEmbedder") as MockEmbedder:
-        mock_embedder = MockEmbedder.return_value
-        mock_embedder.aembed_texts = AsyncMock(return_value=mock_query_embedding)
+    with patch("specagent.config.settings.use_local_embeddings", False):
+        with patch("specagent.nodes.retriever.get_hf_embedder") as mock_get_embedder:
+            mock_embedder = MagicMock()
+            mock_embedder.aembed_texts = AsyncMock(return_value=mock_query_embedding)
+            mock_get_embedder.return_value = mock_embedder
 
-        with patch("specagent.config.settings") as mock_settings:
-            mock_settings.faiss_index_path = str(index_path)
+            with patch("specagent.nodes.retriever.get_faiss_index") as mock_get_index:
+                mock_get_index.return_value = real_index
 
-            # Run retriever node
-            result_state = retriever_node(state)
+                # Run retriever node
+                result_state = retriever_node(state)
 
     # Verify embedder was called with rewritten_question, not original
     mock_embedder.aembed_texts.assert_called_once_with(
@@ -118,17 +118,18 @@ def test_retriever_node_index_not_loaded(sample_chunks, sample_embeddings):
     # Mock embedder
     mock_query_embedding = sample_embeddings[0:1]  # aembed_texts returns array
 
-    with patch("specagent.nodes.retriever.HuggingFaceEmbedder") as MockEmbedder:
-        mock_embedder = MockEmbedder.return_value
-        mock_embedder.aembed_texts = AsyncMock(return_value=mock_query_embedding)
+    with patch("specagent.config.settings.use_local_embeddings", False):
+        with patch("specagent.nodes.retriever.get_hf_embedder") as mock_get_embedder:
+            mock_embedder = MagicMock()
+            mock_embedder.aembed_texts = AsyncMock(return_value=mock_query_embedding)
+            mock_get_embedder.return_value = mock_embedder
 
-        # Mock FAISSIndex.load to raise FileNotFoundError
-        with patch("specagent.nodes.retriever.FAISSIndex") as MockIndex:
-            mock_index = MockIndex.return_value
-            mock_index.load.side_effect = FileNotFoundError("Index file not found: /nonexistent/path/faiss.index.index")
+            # Mock get_faiss_index to raise FileNotFoundError
+            with patch("specagent.nodes.retriever.get_faiss_index") as mock_get_index:
+                mock_get_index.side_effect = FileNotFoundError("Index file not found: /nonexistent/path/faiss.index.index")
 
-            # Run retriever node
-            result_state = retriever_node(state)
+                # Run retriever node
+                result_state = retriever_node(state)
 
     # Verify error was set
     assert "error" in result_state
@@ -145,25 +146,25 @@ def test_retriever_node_embedding_error(tmp_index_dir, sample_chunks, sample_emb
     from specagent.nodes.retriever import retriever_node
     from specagent.retrieval.indexer import FAISSIndex
 
-    # Build and save index
-    index = FAISSIndex()
-    index.build(sample_chunks, sample_embeddings)
-    index_path = tmp_index_dir / "faiss.index"
-    index.save(index_path)
+    # Build real index for testing
+    real_index = FAISSIndex()
+    real_index.build(sample_chunks, sample_embeddings)
 
     # Create state
     state: GraphState = create_initial_state("What is HARQ?")
 
     # Mock embedder to raise error
-    with patch("specagent.nodes.retriever.HuggingFaceEmbedder") as MockEmbedder:
-        mock_embedder = MockEmbedder.return_value
-        mock_embedder.aembed_texts = AsyncMock(side_effect=Exception("API rate limit exceeded"))
+    with patch("specagent.config.settings.use_local_embeddings", False):
+        with patch("specagent.nodes.retriever.get_hf_embedder") as mock_get_embedder:
+            mock_embedder = MagicMock()
+            mock_embedder.aembed_texts = AsyncMock(side_effect=Exception("API rate limit exceeded"))
+            mock_get_embedder.return_value = mock_embedder
 
-        with patch("specagent.config.settings") as mock_settings:
-            mock_settings.faiss_index_path = str(index_path)
+            with patch("specagent.nodes.retriever.get_faiss_index") as mock_get_index:
+                mock_get_index.return_value = real_index
 
-            # Run retriever node
-            result_state = retriever_node(state)
+                # Run retriever node
+                result_state = retriever_node(state)
 
     # Verify error was set
     assert "error" in result_state
@@ -200,27 +201,27 @@ def test_retriever_node_returns_top_10(sample_embeddings, tmp_index_dir):
     norms = np.linalg.norm(many_embeddings, axis=1, keepdims=True)
     many_embeddings = many_embeddings / norms
 
-    # Build and save index
-    index = FAISSIndex()
-    index.build(many_chunks, many_embeddings)
-    index_path = tmp_index_dir / "faiss.index"
-    index.save(index_path)
+    # Build real index for testing
+    real_index = FAISSIndex()
+    real_index.build(many_chunks, many_embeddings)
 
     # Create state
     state: GraphState = create_initial_state("Tell me about 3GPP")
 
-    # Mock embedder
+    # Mock embedder and index getters
     mock_query_embedding = many_embeddings[0:1]  # aembed_texts returns array
 
-    with patch("specagent.nodes.retriever.HuggingFaceEmbedder") as MockEmbedder:
-        mock_embedder = MockEmbedder.return_value
-        mock_embedder.aembed_texts = AsyncMock(return_value=mock_query_embedding)
+    with patch("specagent.config.settings.use_local_embeddings", False):
+        with patch("specagent.nodes.retriever.get_hf_embedder") as mock_get_embedder:
+            mock_embedder = MagicMock()
+            mock_embedder.aembed_texts = AsyncMock(return_value=mock_query_embedding)
+            mock_get_embedder.return_value = mock_embedder
 
-        with patch("specagent.config.settings") as mock_settings:
-            mock_settings.faiss_index_path = str(index_path)
+            with patch("specagent.nodes.retriever.get_faiss_index") as mock_get_index:
+                mock_get_index.return_value = real_index
 
-            # Run retriever node
-            result_state = retriever_node(state)
+                # Run retriever node
+                result_state = retriever_node(state)
 
     # Verify exactly 10 chunks returned
     assert len(result_state["retrieved_chunks"]) == 10
@@ -238,28 +239,27 @@ def test_retriever_node_chunk_metadata_conversion(
     from specagent.nodes.retriever import retriever_node
     from specagent.retrieval.indexer import FAISSIndex
 
-    # Build the real index for mocking
+    # Build the real index for testing
     real_index = FAISSIndex()
     real_index.build(sample_chunks, sample_embeddings)
 
     # Create state
     state: GraphState = create_initial_state("What is HARQ?")
 
-    # Mock embedder
+    # Mock embedder and index getters
     mock_query_embedding = sample_embeddings[0:1]  # aembed_texts returns array
 
-    with patch("specagent.nodes.retriever.HuggingFaceEmbedder") as MockEmbedder:
-        mock_embedder = MockEmbedder.return_value
-        mock_embedder.aembed_texts = AsyncMock(return_value=mock_query_embedding)
+    with patch("specagent.config.settings.use_local_embeddings", False):
+        with patch("specagent.nodes.retriever.get_hf_embedder") as mock_get_embedder:
+            mock_embedder = MagicMock()
+            mock_embedder.aembed_texts = AsyncMock(return_value=mock_query_embedding)
+            mock_get_embedder.return_value = mock_embedder
 
-        # Mock FAISSIndex to return our pre-built index
-        with patch("specagent.nodes.retriever.FAISSIndex") as MockIndex:
-            # Make load() a no-op since we're providing a pre-built index
-            real_index.load = MagicMock()
-            MockIndex.return_value = real_index
+            with patch("specagent.nodes.retriever.get_faiss_index") as mock_get_index:
+                mock_get_index.return_value = real_index
 
-            # Run retriever node
-            result_state = retriever_node(state)
+                # Run retriever node
+                result_state = retriever_node(state)
 
     # Verify chunk metadata was correctly converted
     first_chunk = result_state["retrieved_chunks"][0]
@@ -290,21 +290,20 @@ def test_retriever_node_empty_index(tmp_index_dir):
     # Create state
     state: GraphState = create_initial_state("What is HARQ?")
 
-    # Mock embedder
+    # Mock embedder and index getters
     mock_query_embedding = np.random.rand(1, 384).astype(np.float32)  # aembed_texts returns 2D array
 
-    with patch("specagent.nodes.retriever.HuggingFaceEmbedder") as MockEmbedder:
-        mock_embedder = MockEmbedder.return_value
-        mock_embedder.aembed_texts = AsyncMock(return_value=mock_query_embedding)
+    with patch("specagent.config.settings.use_local_embeddings", False):
+        with patch("specagent.nodes.retriever.get_hf_embedder") as mock_get_embedder:
+            mock_embedder = MagicMock()
+            mock_embedder.aembed_texts = AsyncMock(return_value=mock_query_embedding)
+            mock_get_embedder.return_value = mock_embedder
 
-        # Mock FAISSIndex to return our empty index
-        with patch("specagent.nodes.retriever.FAISSIndex") as MockIndex:
-            # Make load() a no-op since we're providing a pre-built index
-            empty_index.load = MagicMock()
-            MockIndex.return_value = empty_index
+            with patch("specagent.nodes.retriever.get_faiss_index") as mock_get_index:
+                mock_get_index.return_value = empty_index
 
-            # Run retriever node
-            result_state = retriever_node(state)
+                # Run retriever node
+                result_state = retriever_node(state)
 
     # Verify empty results (not an error)
     assert result_state.get("retrieved_chunks", []) == []

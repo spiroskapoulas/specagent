@@ -10,8 +10,11 @@ from typing import TYPE_CHECKING
 
 from specagent.config import settings
 from specagent.graph.state import RetrievedChunk
-from specagent.retrieval.embeddings import HuggingFaceEmbedder, LocalEmbedder
-from specagent.retrieval.indexer import FAISSIndex
+from specagent.retrieval.resources import (
+    get_faiss_index,
+    get_hf_embedder,
+    get_local_embedder,
+)
 
 if TYPE_CHECKING:
     from specagent.graph.state import GraphState
@@ -36,22 +39,21 @@ def retriever_node(state: "GraphState") -> "GraphState":
         return state
 
     try:
-        # Initialize embedder based on config
+        # Get cached embedder based on config
         if settings.use_local_embeddings:
-            embedder = LocalEmbedder()
+            embedder = get_local_embedder()
             # Use synchronous method for local embeddings
             query_embedding = embedder.embed_query(query)
         else:
-            embedder = HuggingFaceEmbedder()
+            embedder = get_hf_embedder()
             # Embed query asynchronously for HF API
             query_embedding = asyncio.run(embedder.aembed_texts([query]))[0]
 
-        # Load FAISS index from disk
-        index = FAISSIndex()
-        index.load(settings.faiss_index_path)
+        # Get cached FAISS index (no more disk loading on every call!)
+        index = get_faiss_index()
 
-        # Search index for top-10 similar chunks
-        results = index.search(query_embedding, k=10)
+        # Search index for top-5 similar chunks (reduced from 10 to improve latency)
+        results = index.search(query_embedding, k=5)
 
         # Convert results to RetrievedChunk objects
         retrieved_chunks: list[RetrievedChunk] = []

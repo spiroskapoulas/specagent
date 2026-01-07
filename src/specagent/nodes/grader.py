@@ -31,25 +31,33 @@ class GradeResult(BaseModel):
     )
 
 
-GRADER_PROMPT = """You are a grader assessing relevance of a retrieved document chunk
+class BatchGradeResult(BaseModel):
+    """Structured output for batch document grading."""
+
+    grades: list[GradeResult] = Field(
+        description="List of grade results, one per document chunk in order"
+    )
+
+
+BATCH_GRADER_PROMPT = """You are a grader assessing relevance of retrieved document chunks
 to a user question about 3GPP telecommunications specifications.
 
 Question: {question}
 
-Document chunk:
----
-{document}
----
+You are given {num_chunks} document chunks to grade. For EACH chunk, determine if it contains
+information relevant to answering the question. Consider: exact matches, related concepts, prerequisite information.
 
-Does this document contain information relevant to answering the question?
-Consider: exact matches, related concepts, prerequisite information.
+Document chunks:
+{documents}
 
-Respond with ONLY a JSON object in this exact format:
-{{"relevant": "yes", "confidence": 0.85}}
-or
-{{"relevant": "no", "confidence": 0.2}}
+Respond with ONLY a JSON object with a "grades" array containing one grade per chunk IN THE SAME ORDER:
+{{"grades": [
+  {{"relevant": "yes", "confidence": 0.85}},
+  {{"relevant": "no", "confidence": 0.2}},
+  ...
+]}}
 
-The confidence must be a number between 0.0 and 1.0."""
+You must provide exactly {num_chunks} grades. Each confidence must be between 0.0 and 1.0."""
 
 
 def grader_node(state: "GraphState") -> "GraphState":
@@ -78,41 +86,50 @@ def grader_node(state: "GraphState") -> "GraphState":
         # Initialize LLM (auto-selects based on config)
         llm = create_llm()
 
-        # Grade each chunk
-        graded_chunks = []
-        total_confidence = 0.0
-
         import json
         import re
 
-        for chunk in retrieved_chunks:
-            # Format prompt with question and chunk content
-            prompt = GRADER_PROMPT.format(
-                question=question,
-                document=chunk.content
+        # Format all chunks into a single prompt
+        documents_text = ""
+        for i, chunk in enumerate(retrieved_chunks, 1):
+            documents_text += f"\n--- Chunk {i} ---\n{chunk.content}\n"
+
+        # Create batch grading prompt
+        prompt = BATCH_GRADER_PROMPT.format(
+            question=question,
+            num_chunks=len(retrieved_chunks),
+            documents=documents_text
+        )
+
+        # Single LLM call to grade all chunks at once
+        response = llm.invoke(prompt)
+
+        # Parse batch JSON response
+        json_match = re.search(r'\{.*\}', response, re.DOTALL)
+        if json_match:
+            json_str = json_match.group(0)
+            parsed = json.loads(json_str)
+            batch_result = BatchGradeResult(**parsed)
+        else:
+            batch_result = BatchGradeResult(**json.loads(response))
+
+        # Verify we got the right number of grades
+        if len(batch_result.grades) != len(retrieved_chunks):
+            raise ValueError(
+                f"Expected {len(retrieved_chunks)} grades but got {len(batch_result.grades)}"
             )
 
-            # Call LLM to grade the chunk
-            response = llm.invoke(prompt)
+        # Create GradedChunk objects from batch results
+        graded_chunks = []
+        total_confidence = 0.0
 
-            # Parse JSON response
-            json_match = re.search(r'\{.*\}', response, re.DOTALL)
-            if json_match:
-                json_str = json_match.group(0)
-                parsed = json.loads(json_str)
-                grade = GradeResult(**parsed)
-            else:
-                grade = GradeResult(**json.loads(response))
-
-            # Create GradedChunk
+        for chunk, grade in zip(retrieved_chunks, batch_result.grades):
             graded_chunk = GradedChunk(
                 chunk=chunk,
                 relevant=grade.relevant,
                 confidence=grade.confidence
             )
             graded_chunks.append(graded_chunk)
-
-            # Accumulate confidence for average
             total_confidence += grade.confidence
 
         # Calculate average confidence
