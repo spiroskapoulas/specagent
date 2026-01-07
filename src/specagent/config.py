@@ -153,7 +153,7 @@ class Settings(BaseSettings):
     # Agent Configuration
     # ==========================================================================
     max_rewrites: int = Field(
-        default=2,
+        default=1,
         ge=0,
         le=5,
         description="Maximum number of query rewrites before giving up",
@@ -163,6 +163,18 @@ class Settings(BaseSettings):
         ge=0.0,
         le=1.0,
         description="Minimum average confidence to skip rewriting",
+    )
+    min_relevant_chunk_percentage: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="Minimum percentage of relevant chunks required to skip rewriting",
+    )
+    high_similarity_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description="Similarity threshold for top-3 chunks to skip rewriting (fast heuristic)",
     )
 
     # ==========================================================================

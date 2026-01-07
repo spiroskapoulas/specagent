@@ -40,19 +40,47 @@ def should_rewrite(state: GraphState) -> Literal["rewrite", "generate"]:
     """
     Conditional edge: Decide if query needs rewriting.
 
-    Triggers rewrite if:
-        1. Average confidence is below threshold
-        2. Haven't exceeded max rewrites
+    Uses a fast similarity heuristic first, then checks quality metrics:
+        1. If top-3 chunks have high similarity (>= threshold), skip rewriting
+        2. Otherwise, rewrite if:
+           - Average confidence is below threshold OR relevant chunk percentage is below threshold
+           - Haven't exceeded max rewrites
 
     Returns:
         "rewrite" to reformulate query, "generate" to proceed
     """
-    avg_confidence = state.get("average_confidence", 0.0)
     rewrite_count = state.get("rewrite_count", 0)
+    retrieved_chunks = state.get("retrieved_chunks", [])
 
-    if avg_confidence < settings.grader_confidence_threshold:
-        if rewrite_count < settings.max_rewrites:
-            return "rewrite"
+    # Fast heuristic: Skip rewriting if top-3 chunks have high similarity
+    if retrieved_chunks:
+        top_3_chunks = retrieved_chunks[:3]
+        avg_similarity = sum(chunk.similarity_score for chunk in top_3_chunks) / len(top_3_chunks)
+
+        if avg_similarity >= settings.high_similarity_threshold:
+            # High-quality retrieval, skip rewriting even if grader is uncertain
+            return "generate"
+
+    # Check quality metrics from grader
+    avg_confidence = state.get("average_confidence", 0.0)
+    graded_chunks = state.get("graded_chunks", [])
+
+    # Calculate percentage of relevant chunks (only if grader has run)
+    if graded_chunks:
+        relevant_count = sum(1 for chunk in graded_chunks if chunk.relevant == "yes")
+        relevant_percentage = relevant_count / len(graded_chunks)
+
+        # Rewrite if quality is poor AND we haven't exceeded max rewrites
+        quality_is_poor = (
+            avg_confidence < settings.grader_confidence_threshold
+            or relevant_percentage < settings.min_relevant_chunk_percentage
+        )
+    else:
+        # No graded chunks yet - fall back to confidence-only check
+        quality_is_poor = avg_confidence < settings.grader_confidence_threshold
+
+    if quality_is_poor and rewrite_count < settings.max_rewrites:
+        return "rewrite"
 
     return "generate"
 
