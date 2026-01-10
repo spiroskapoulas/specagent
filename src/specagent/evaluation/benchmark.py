@@ -6,12 +6,17 @@ questions and computes accuracy by difficulty level.
 """
 
 import json
+import logging
 import statistics
+import sys
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+
+# Configure module logger
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -325,11 +330,53 @@ def analyze_confidence_by_correctness(
     }
 
 
+def setup_trace_logging(output_dir: Path, timestamp: str, verbose: bool = False) -> logging.Logger:
+    """
+    Setup trace logging for benchmark execution.
+
+    Creates a dedicated trace logger that writes to a file and optionally to console.
+
+    Args:
+        output_dir: Directory to save trace log
+        timestamp: Timestamp for log filename
+        verbose: If True, also output to console
+
+    Returns:
+        Configured trace logger
+    """
+    trace_logger = logging.getLogger("benchmark_trace")
+    trace_logger.setLevel(logging.INFO)
+    trace_logger.propagate = False  # Don't propagate to root logger
+
+    # Remove existing handlers
+    trace_logger.handlers.clear()
+
+    # File handler - always write to file
+    log_filename = f"benchmark_trace_{timestamp.replace(':', '-').split('.')[0]}.log"
+    log_path = output_dir / log_filename
+    file_handler = logging.FileHandler(log_path, mode='w', encoding='utf-8')
+    file_handler.setLevel(logging.INFO)
+    file_formatter = logging.Formatter('%(message)s')
+    file_handler.setFormatter(file_formatter)
+    trace_logger.addHandler(file_handler)
+
+    # Console handler - only if verbose
+    if verbose:
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(logging.INFO)
+        console_formatter = logging.Formatter('%(message)s')
+        console_handler.setFormatter(console_formatter)
+        trace_logger.addHandler(console_handler)
+
+    return trace_logger
+
+
 def run_benchmark(
     questions: list[BenchmarkQuestion],
     limit: int | None = None,
     output_dir: str | Path = "evaluation/results",
     skip_health_check: bool = False,
+    verbose: bool = False,
 ) -> BenchmarkReport:
     """
     Run benchmark evaluation.
@@ -339,6 +386,7 @@ def run_benchmark(
         limit: Maximum number of questions to run (for testing)
         output_dir: Directory to save results
         skip_health_check: Skip LLM endpoint health check (default: False)
+        verbose: If True, output detailed trace to console (default: False)
 
     Returns:
         BenchmarkReport with all results
@@ -370,20 +418,52 @@ def run_benchmark(
     if limit is not None:
         questions = questions[:limit]
 
+    # Setup trace logging
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().isoformat()
+    trace = setup_trace_logging(output_path, timestamp, verbose)
+
+    # Log benchmark header
+    trace.info("=" * 80)
+    trace.info(f"SpecAgent Benchmark Trace - {timestamp}")
+    trace.info("=" * 80)
+    trace.info(f"Total questions: {len(questions)}")
+    trace.info(f"Output directory: {output_path}")
+    trace.info("")
+
     # Initialize results
     results: list[BenchmarkResult] = []
 
     # Run each question through the pipeline
-    for question in questions:
+    for idx, question in enumerate(questions, 1):
+        trace.info(f"[Q{idx}/{len(questions)}] {question.question}")
+        trace.info(f"  Expected: {question.answer}")
+        trace.info(f"  Difficulty: {question.difficulty}")
+
         try:
             # Execute pipeline
+            import time
+            start_time = time.time()
             state = run_query(question.question)
+            elapsed_ms = (time.time() - start_time) * 1000
+
+            # Log router decision
+            route_decision = state.get("route_decision", "unknown")
+            route_reasoning = state.get("route_reasoning", "")
+            trace.info(f"  → Router: {route_decision}")
+            if route_reasoning and verbose:
+                trace.info(f"    Reasoning: {route_reasoning}")
 
             # Extract generated answer
             generated_answer = state.get("generation", "")
 
             # Handle errors or rejections
             if state.get("error"):
+                error_msg = state.get("error")
+                trace.info(f"  → Error: {error_msg}")
+                trace.info(f"  → Result: ✗ ERROR (latency: {elapsed_ms:.0f}ms)")
+                trace.info("")
                 results.append(
                     BenchmarkResult(
                         question_id=question.id,
@@ -392,15 +472,17 @@ def run_benchmark(
                         generated_answer=generated_answer or "",
                         is_correct=False,
                         confidence=0.0,
-                        latency_ms=state.get("processing_time_ms", 0.0),
+                        latency_ms=state.get("processing_time_ms", elapsed_ms),
                         difficulty=question.difficulty,
                         rewrites=state.get("rewrite_count", 0),
-                        error=state.get("error"),
+                        error=error_msg,
                     )
                 )
                 continue
 
             if state.get("route_decision") == "reject":
+                trace.info(f"  → Result: ✗ REJECTED by router (latency: {elapsed_ms:.0f}ms)")
+                trace.info("")
                 results.append(
                     BenchmarkResult(
                         question_id=question.id,
@@ -409,13 +491,31 @@ def run_benchmark(
                         generated_answer="",
                         is_correct=False,
                         confidence=0.0,
-                        latency_ms=state.get("processing_time_ms", 0.0),
+                        latency_ms=state.get("processing_time_ms", elapsed_ms),
                         difficulty=question.difficulty,
                         rewrites=state.get("rewrite_count", 0),
                         error="Question was rejected by router",
                     )
                 )
                 continue
+
+            # Log retrieval info
+            retrieved_chunks = state.get("retrieved_chunks", [])
+            graded_chunks = state.get("graded_chunks", [])
+            trace.info(f"  → Retrieved: {len(retrieved_chunks)} chunks")
+            if graded_chunks:
+                relevant_count = len([c for c in graded_chunks if c.get("relevant") == "yes"])
+                trace.info(f"  → Grading: {relevant_count} relevant, {len(graded_chunks) - relevant_count} filtered")
+
+            # Log rewrites
+            rewrite_count = state.get("rewrite_count", 0)
+            if rewrite_count > 0:
+                trace.info(f"  → Rewrites: {rewrite_count}")
+
+            # Log generation
+            if generated_answer:
+                answer_preview = generated_answer[:100] + "..." if len(generated_answer) > 100 else generated_answer
+                trace.info(f"  → Generated: {answer_preview}")
 
             # Check correctness
             is_correct = check_answer_correctness(
@@ -424,6 +524,13 @@ def run_benchmark(
                 use_llm_judge=True,
             )
 
+            # Log result
+            confidence = state.get("average_confidence", 0.0)
+            result_icon = "✓" if is_correct else "✗"
+            result_text = "CORRECT" if is_correct else "INCORRECT"
+            trace.info(f"  → Result: {result_icon} {result_text} (confidence: {confidence:.2f}, latency: {elapsed_ms:.0f}ms)")
+            trace.info("")
+
             results.append(
                 BenchmarkResult(
                     question_id=question.id,
@@ -431,16 +538,19 @@ def run_benchmark(
                     expected_answer=question.answer,
                     generated_answer=generated_answer,
                     is_correct=is_correct,
-                    confidence=state.get("average_confidence", 0.0),
-                    latency_ms=state.get("processing_time_ms", 0.0),
+                    confidence=confidence,
+                    latency_ms=state.get("processing_time_ms", elapsed_ms),
                     difficulty=question.difficulty,
-                    rewrites=state.get("rewrite_count", 0),
+                    rewrites=rewrite_count,
                     error=None,
                 )
             )
 
         except Exception as e:
             # Handle unexpected errors
+            trace.info(f"  → Exception: {str(e)}")
+            trace.info(f"  → Result: ✗ EXCEPTION")
+            trace.info("")
             results.append(
                 BenchmarkResult(
                     question_id=question.id,
@@ -485,8 +595,26 @@ def run_benchmark(
     confidence_distribution = compute_confidence_distribution(results)
     confidence_stats = compute_confidence_stats(results)
 
+    # Log summary
+    trace.info("=" * 80)
+    trace.info("BENCHMARK SUMMARY")
+    trace.info("=" * 80)
+    trace.info(f"Total Questions: {total_questions}")
+    trace.info(f"Correct Answers: {correct_answers}")
+    trace.info(f"Accuracy: {accuracy:.1%}")
+    trace.info(f"Average Latency: {average_latency_ms:.0f}ms")
+    trace.info(f"Average Confidence: {average_confidence:.2f}")
+    trace.info("")
+
+    if accuracy_by_difficulty:
+        trace.info("Accuracy by Difficulty:")
+        for difficulty in ["Easy", "Intermediate", "Hard"]:
+            if difficulty in accuracy_by_difficulty:
+                diff_acc = accuracy_by_difficulty[difficulty]
+                trace.info(f"  {difficulty}: {diff_acc:.1%}")
+        trace.info("")
+
     # Create report
-    timestamp = datetime.now().isoformat()
     report = BenchmarkReport(
         timestamp=timestamp,
         total_questions=total_questions,
@@ -500,9 +628,9 @@ def run_benchmark(
         confidence_stats=confidence_stats,
     )
 
-    # Save results
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
+    # Save results (output_path already created earlier)
+    # output_path = Path(output_dir)  # Already created above
+    # output_path.mkdir(parents=True, exist_ok=True)  # Already done
 
     # Save JSON
     json_filename = f"benchmark_{timestamp.replace(':', '-').split('.')[0]}.json"
@@ -515,6 +643,22 @@ def run_benchmark(
     md_path = output_path / md_filename
     with open(md_path, "w") as f:
         f.write(report.to_markdown())
+
+    # Log output file paths
+    trace.info("Output Files:")
+    trace.info(f"  JSON: {json_path}")
+    trace.info(f"  Markdown: {md_path}")
+    trace_log_path = output_path / f"benchmark_trace_{timestamp.replace(':', '-').split('.')[0]}.log"
+    trace.info(f"  Trace: {trace_log_path}")
+    trace.info("")
+    trace.info("=" * 80)
+    trace.info("Benchmark complete!")
+    trace.info("=" * 80)
+
+    # Close trace logger handlers
+    for handler in trace.handlers[:]:
+        handler.close()
+        trace.removeHandler(handler)
 
     return report
 

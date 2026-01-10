@@ -75,6 +75,13 @@ Examples:
         help="Skip LLM endpoint health check before running (not recommended)",
     )
 
+    parser.add_argument(
+        "--verbose",
+        "-v",
+        action="store_true",
+        help="Show detailed trace output to console (always saved to trace log file)",
+    )
+
     return parser.parse_args()
 
 
@@ -224,13 +231,24 @@ def main():
     console.print()
 
     try:
-        with console.status("[bold green]Processing questions..."):
+        # If verbose, don't use status spinner (conflicts with trace output)
+        if args.verbose:
             report = run_benchmark(
                 questions=questions,
                 limit=args.limit,
                 output_dir=args.output_dir,
                 skip_health_check=args.skip_health_check,
+                verbose=True,
             )
+        else:
+            with console.status("[bold green]Processing questions..."):
+                report = run_benchmark(
+                    questions=questions,
+                    limit=args.limit,
+                    output_dir=args.output_dir,
+                    skip_health_check=args.skip_health_check,
+                    verbose=False,
+                )
 
         # Display results
         display_results(report)
@@ -241,11 +259,14 @@ def main():
         output_path = Path(args.output_dir)
         json_files = sorted(output_path.glob("benchmark_*.json"))
         md_files = sorted(output_path.glob("benchmark_*.md"))
+        trace_files = sorted(output_path.glob("benchmark_trace_*.log"))
 
         if json_files:
-            console.print(f"[green]JSON Report:[/green]  {json_files[-1]}")
+            console.print(f"[green]JSON Report:[/green]   {json_files[-1]}")
         if md_files:
-            console.print(f"[green]MD Report:[/green]    {md_files[-1]}")
+            console.print(f"[green]MD Report:[/green]     {md_files[-1]}")
+        if trace_files:
+            console.print(f"[green]Trace Log:[/green]     {trace_files[-1]}")
 
         console.print()
 
