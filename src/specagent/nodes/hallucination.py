@@ -3,8 +3,13 @@ Hallucination checker node: Verifies generated answer is grounded in sources.
 
 Uses LLM-as-judge to compare the generated answer against source chunks
 and identify any claims not supported by the retrieved context.
+
+Hallucination check is optional and only runs when:
+1. average_confidence < 0.65 after generation, OR
+2. generation contains numerical values or tables
 """
 
+import re
 from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, Field
@@ -57,9 +62,47 @@ Where grounded is "yes" if all claims are fully supported, "partial" if most cla
 or "no" if significant claims are not supported."""
 
 
+def _contains_numerical_or_tabular_content(text: str) -> bool:
+    """
+    Detect if text contains numerical values or table-like structures.
+
+    Args:
+        text: The generated text to analyze
+
+    Returns:
+        True if text contains numbers or tables, False otherwise
+    """
+    # Pattern for numerical values (integers, floats, percentages, ranges)
+    # Examples: 5, 3.14, 50%, 5-10, 1..10, 100ms, 2.4GHz
+    number_pattern = re.compile(
+        r'\b\d+\.?\d*\s*(%|ms|MHz|GHz|kHz|dB|dBm|km|m|cm|mm|Hz|bits?|bytes?|KB|MB|GB)\b'  # with units
+        r'|\b\d+\.?\d*%\b'  # percentages
+        r'|\b\d+-\d+\b'  # ranges with dash
+        r'|\b\d+\.\.\d+\b'  # ranges with dots
+        r'|\b\d+(?:\.\d+)?\b'  # standalone numbers (integers or floats)
+    )
+
+    # Pattern for markdown tables (lines with multiple | characters)
+    table_pattern = re.compile(r'^[\s]*\|[^|]*\|[^|]*\|', re.MULTILINE)
+
+    # Check for numerical content
+    if number_pattern.search(text):
+        return True
+
+    # Check for table structures
+    if table_pattern.search(text):
+        return True
+
+    return False
+
+
 def hallucination_check_node(state: "GraphState") -> "GraphState":
     """
     Check if generated answer is grounded in source documents.
+
+    Only runs hallucination check when:
+    1. average_confidence < 0.65 after generation, OR
+    2. generation contains numerical values or tables
 
     Args:
         state: Current graph state with generation and graded_chunks
@@ -73,6 +116,16 @@ def hallucination_check_node(state: "GraphState") -> "GraphState":
 
     # Handle case where generation is None or empty
     if not generation or generation.strip() == "":
+        state["hallucination_check"] = "grounded"
+        state["ungrounded_claims"] = []
+        return state
+
+    # Check if hallucination check should be skipped
+    average_confidence = state.get("average_confidence", 1.0)
+    has_numerical_content = _contains_numerical_or_tabular_content(generation)
+
+    # Skip hallucination check if confidence is high AND no numerical/tabular content
+    if average_confidence >= 0.65 and not has_numerical_content:
         state["hallucination_check"] = "grounded"
         state["ungrounded_claims"] = []
         return state
