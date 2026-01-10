@@ -64,6 +64,9 @@ def grader_node(state: "GraphState") -> "GraphState":
     """
     Grade retrieved chunks for relevance to the query.
 
+    Grades only the top-3 chunks (by similarity score) for latency optimization.
+    Retriever fetches 10 chunks, but we only grade the most promising ones.
+
     Args:
         state: Current graph state with retrieved_chunks populated
 
@@ -76,8 +79,11 @@ def grader_node(state: "GraphState") -> "GraphState":
     question = state.get("question", "")
     retrieved_chunks = state.get("retrieved_chunks", [])
 
+    # Only grade top-3 chunks for latency optimization
+    chunks_to_grade = retrieved_chunks[:3]
+
     # Handle empty chunks case
-    if not retrieved_chunks:
+    if not chunks_to_grade:
         state["graded_chunks"] = []
         state["average_confidence"] = 0.0
         return state
@@ -89,15 +95,15 @@ def grader_node(state: "GraphState") -> "GraphState":
         import json
         import re
 
-        # Format all chunks into a single prompt
+        # Format chunks to grade into a single prompt
         documents_text = ""
-        for i, chunk in enumerate(retrieved_chunks, 1):
+        for i, chunk in enumerate(chunks_to_grade, 1):
             documents_text += f"\n--- Chunk {i} ---\n{chunk.content}\n"
 
         # Create batch grading prompt
         prompt = BATCH_GRADER_PROMPT.format(
             question=question,
-            num_chunks=len(retrieved_chunks),
+            num_chunks=len(chunks_to_grade),
             documents=documents_text
         )
 
@@ -114,16 +120,16 @@ def grader_node(state: "GraphState") -> "GraphState":
             batch_result = BatchGradeResult(**json.loads(response))
 
         # Verify we got the right number of grades
-        if len(batch_result.grades) != len(retrieved_chunks):
+        if len(batch_result.grades) != len(chunks_to_grade):
             raise ValueError(
-                f"Expected {len(retrieved_chunks)} grades but got {len(batch_result.grades)}"
+                f"Expected {len(chunks_to_grade)} grades but got {len(batch_result.grades)}"
             )
 
         # Create GradedChunk objects from batch results
         graded_chunks = []
         total_confidence = 0.0
 
-        for chunk, grade in zip(retrieved_chunks, batch_result.grades):
+        for chunk, grade in zip(chunks_to_grade, batch_result.grades):
             graded_chunk = GradedChunk(
                 chunk=chunk,
                 relevant=grade.relevant,

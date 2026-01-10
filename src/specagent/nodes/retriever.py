@@ -2,7 +2,7 @@
 Retriever node: Fetches relevant document chunks from FAISS index.
 
 Embeds the user's query and searches the FAISS index for the top-10
-most similar document chunks. Updates graph state with retrieved chunks.
+most similar document chunks. Grader will only grade the top-3 for latency optimization.
 """
 
 import asyncio
@@ -52,8 +52,8 @@ def retriever_node(state: "GraphState") -> "GraphState":
         # Get cached FAISS index (no more disk loading on every call!)
         index = get_faiss_index()
 
-        # Search index for top-5 similar chunks (reduced from 10 to improve latency)
-        results = index.search(query_embedding, k=5)
+        # Search index for top-10 similar chunks (grader will only grade top-3)
+        results = index.search(query_embedding, k=10)
 
         # Convert results to RetrievedChunk objects
         retrieved_chunks: list[RetrievedChunk] = []
