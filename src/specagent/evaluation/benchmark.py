@@ -504,7 +504,7 @@ def run_benchmark(
             graded_chunks = state.get("graded_chunks", [])
             trace.info(f"  → Retrieved: {len(retrieved_chunks)} chunks")
             if graded_chunks:
-                relevant_count = len([c for c in graded_chunks if c.get("relevant") == "yes"])
+                relevant_count = len([c for c in graded_chunks if c.relevant == "yes"])
                 trace.info(f"  → Grading: {relevant_count} relevant, {len(graded_chunks) - relevant_count} filtered")
 
             # Log rewrites
