@@ -9,7 +9,8 @@ Defines the agentic RAG graph with conditional routing:
 Graph visualization can be exported via get_graph_visualization().
 """
 
-from typing import Literal
+import time
+from typing import Callable, Literal
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -24,6 +25,37 @@ from specagent.nodes import (
     rewriter_node,
     router_node,
 )
+
+
+def create_timed_node(node_func: Callable[[GraphState], GraphState], node_name: str) -> Callable[[GraphState], GraphState]:
+    """
+    Wrap a node function with timing instrumentation.
+
+    Tracks execution time and stores it in state['node_timings'].
+
+    Args:
+        node_func: The original node function
+        node_name: Name of the node for timing tracking
+
+    Returns:
+        Wrapped node function with timing
+    """
+    def timed_node(state: GraphState) -> GraphState:
+        start_time = time.perf_counter()
+        result_state = node_func(state)
+        elapsed_ms = (time.perf_counter() - start_time) * 1000
+
+        # Update node timings in state
+        if "node_timings" not in result_state:
+            result_state["node_timings"] = {}
+
+        # Track cumulative time for nodes that may run multiple times (e.g., retriever, grader in rewrite loop)
+        current_time = result_state["node_timings"].get(node_name, 0.0)
+        result_state["node_timings"][node_name] = current_time + elapsed_ms
+
+        return result_state
+
+    return timed_node
 
 
 def should_retrieve(state: GraphState) -> Literal["retrieve", "reject"]:
@@ -145,13 +177,13 @@ def build_graph() -> CompiledStateGraph:
     # Initialize graph with state schema
     workflow = StateGraph(GraphState)
 
-    # Add nodes
-    workflow.add_node("router", router_node)
-    workflow.add_node("retriever", retriever_node)
-    workflow.add_node("grader", grader_node)
-    workflow.add_node("rewriter", rewriter_node)
-    workflow.add_node("generator", generator_node)
-    workflow.add_node("hallucination_check", hallucination_check_node)
+    # Add nodes with timing instrumentation
+    workflow.add_node("router", create_timed_node(router_node, "router"))
+    workflow.add_node("retriever", create_timed_node(retriever_node, "retriever"))
+    workflow.add_node("grader", create_timed_node(grader_node, "grader"))
+    workflow.add_node("rewriter", create_timed_node(rewriter_node, "rewriter"))
+    workflow.add_node("generator", create_timed_node(generator_node, "generator"))
+    workflow.add_node("hallucination_check", create_timed_node(hallucination_check_node, "hallucination_check"))
 
     # Add edges from START
     workflow.add_edge(START, "router")
@@ -209,8 +241,6 @@ def run_query(question: str) -> GraphState:
     Returns:
         Final graph state with answer, citations, and metadata
     """
-    import time
-
     # Create initial state
     state = create_initial_state(question)
 

@@ -146,6 +146,15 @@ class GraphState(TypedDict, total=False):
     processing_time_ms: float
     """Total processing time in milliseconds."""
 
+    # ==========================================================================
+    # Timing Breakdown
+    # ==========================================================================
+    node_timings: dict[str, float]
+    """Timing for each node execution in milliseconds (e.g., {'router': 150.2, 'retriever': 320.5})."""
+
+    llm_inference_times: list[dict[str, float]]
+    """LLM inference timings with context (e.g., [{'node': 'router', 'inference_ms': 145.3}])."""
+
 
 def create_initial_state(question: str) -> GraphState:
     """
@@ -167,4 +176,6 @@ def create_initial_state(question: str) -> GraphState:
         generation=None,
         error=None,
         ungrounded_claims=[],
+        node_timings={},
+        llm_inference_times=[],
     )

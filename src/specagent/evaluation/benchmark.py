@@ -529,6 +529,20 @@ def run_benchmark(
             result_icon = "✓" if is_correct else "✗"
             result_text = "CORRECT" if is_correct else "INCORRECT"
             trace.info(f"  → Result: {result_icon} {result_text} (confidence: {confidence:.2f}, latency: {elapsed_ms:.0f}ms)")
+
+            # Log timing breakdown if available
+            node_timings = state.get("node_timings", {})
+            if node_timings and verbose:
+                trace.info(f"  → Timing breakdown:")
+                for node_name, node_time in sorted(node_timings.items()):
+                    trace.info(f"      {node_name}: {node_time:.0f}ms")
+
+            # Log LLM inference times if available
+            llm_times = state.get("llm_inference_times", [])
+            if llm_times and verbose:
+                total_llm_time = sum(t.get("inference_ms", 0) for t in llm_times)
+                trace.info(f"  → LLM inference time: {total_llm_time:.0f}ms ({len(llm_times)} calls)")
+
             trace.info("")
 
             results.append(
@@ -613,6 +627,16 @@ def run_benchmark(
                 diff_acc = accuracy_by_difficulty[difficulty]
                 trace.info(f"  {difficulty}: {diff_acc:.1%}")
         trace.info("")
+
+    # Compute aggregate node timing statistics
+    all_node_timings: dict[str, list[float]] = {}
+    for result in results:
+        # Note: We don't have direct access to node_timings from results
+        # This would require storing node_timings in BenchmarkResult
+        # For now, skip aggregate timing in summary
+        pass
+
+    trace.info("")
 
     # Create report
     report = BenchmarkReport(

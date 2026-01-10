@@ -61,6 +61,25 @@ class CustomEndpointLLM:
         Raises:
             requests.HTTPError: If the API request fails after all retries
         """
+        result_text, _ = self.invoke_with_timing(prompt)
+        return result_text
+
+    def invoke_with_timing(self, prompt: str) -> tuple[str, float]:
+        """
+        Call the LLM with a prompt and return timing information.
+
+        Implements retry logic with exponential backoff for serverless endpoints
+        that may return 502/503 errors during cold starts.
+
+        Args:
+            prompt: The input prompt text
+
+        Returns:
+            Tuple of (response_text, inference_time_ms)
+
+        Raises:
+            requests.HTTPError: If the API request fails after all retries
+        """
         payload = {
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
@@ -70,13 +89,15 @@ class CustomEndpointLLM:
         last_exception = None
         for attempt in range(self.max_retries):
             try:
+                start_time = time.perf_counter()
                 response = requests.post(
                     self.endpoint_url, json=payload, timeout=self.timeout
                 )
                 response.raise_for_status()
+                inference_ms = (time.perf_counter() - start_time) * 1000
 
                 result = response.json()
-                return result["choices"][0]["message"]["content"]
+                return result["choices"][0]["message"]["content"], inference_ms
 
             except requests.HTTPError as e:
                 last_exception = e
