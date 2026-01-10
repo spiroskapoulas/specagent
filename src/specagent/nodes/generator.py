@@ -14,8 +14,7 @@ if TYPE_CHECKING:
     from specagent.graph.state import GraphState
 
 
-GENERATOR_PROMPT = """You are a 3GPP specification expert. Answer the question using ONLY
-the provided context from official 3GPP documentation.
+GENERATOR_PROMPT = """You are a 3GPP specification expert assistant. Your task is to extract precise answers from 3GPP specification context.
 
 Question: {question}
 
@@ -24,13 +23,45 @@ Context (from 3GPP specifications):
 {context}
 ---
 
-Instructions:
-1. Answer based ONLY on the provided context
-2. Cite sources using format: [TS XX.XXX §Y.Z] where available
-3. If the context doesn't contain enough information, say "I don't have enough information
-   in the available specifications to fully answer this question."
-4. Be precise and technical - this is for telecom engineers
-5. If multiple specs are relevant, synthesize them coherently
+Instructions - Follow these steps:
+
+STEP 1 - SEARCH: Review each numbered chunk to identify which contain information relevant to the question.
+- Look for exact parameter names, values, units, and technical terms
+- Note chunk numbers that contain relevant information
+
+STEP 2 - EXTRACT: Extract the specific answer from the relevant chunks.
+- For numerical parameters: Extract the exact value WITH units (e.g., "160 ms", "25 m", "9 dB")
+- For technical terms: Extract exact terminology as stated in the specification
+- For descriptive answers: Synthesize information from multiple chunks if needed
+
+STEP 3 - VERIFY: Cross-check your answer against the original chunks.
+- Ensure the answer is directly stated or clearly implied in the context
+- Verify units and numerical values are correct
+- Confirm you haven't added information not present in the chunks
+
+STEP 4 - CITE: Add inline citations for every claim.
+- REQUIRED: Every statement MUST have a citation in format [TS XX.XXX §Y.Z]
+- Use the exact source references from the chunk headers
+- If information comes from multiple chunks, cite all relevant sources
+
+STEP 5 - RESPOND: Provide your final answer.
+- Start with the direct answer to the question
+- Include supporting details if helpful
+- ALL citations MUST be inline using [TS XX.XXX §Y.Z] format
+
+CRITICAL RULES:
+✓ Answer ONLY from the provided context - NO external knowledge
+✓ ALWAYS cite sources - every claim needs [TS XX.XXX §Y.Z]
+✓ Extract exact values with units for numerical parameters
+✓ Say "I don't have enough information" ONLY if:
+  - The question asks for information completely absent from all chunks
+  - The chunks discuss related but different topics
+  - You cannot find the specific parameter, value, or term requested
+
+✗ DO NOT say "insufficient information" if:
+  - The answer is present but requires reading multiple chunks
+  - The information is stated in technical terminology
+  - The value is embedded in a table or formula
 
 Answer:"""
 
@@ -74,12 +105,12 @@ def generator_node(state: "GraphState") -> "GraphState":
         return state
 
     try:
-        # Format chunks into context string with source metadata
+        # Format chunks into context string with source metadata and numbering
         context_parts = []
-        for chunk in relevant_chunks:
-            # Format: [TS XX.XXX §Y.Z]: content
+        for idx, chunk in enumerate(relevant_chunks, start=1):
+            # Format: **Chunk N** [TS XX.XXX §Y.Z]: content
             source_ref = f"[TS {chunk.spec_id.replace('TS', '').replace('.', '.', 1)} §{chunk.section}]"
-            context_parts.append(f"{source_ref}: {chunk.content}")
+            context_parts.append(f"**Chunk {idx}** {source_ref}:\n{chunk.content}")
 
         context = "\n\n".join(context_parts)
 

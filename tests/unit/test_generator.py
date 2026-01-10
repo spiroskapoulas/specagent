@@ -42,8 +42,8 @@ class TestGeneratorNode:
         ]
         return state
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_with_relevant_chunks(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_with_relevant_chunks(self, mock_create_llm):
         """Test generator creates answer from relevant chunks."""
         # Mock LLM to return answer with citations
         mock_llm = MagicMock()
@@ -51,7 +51,7 @@ class TestGeneratorNode:
             "The maximum number of HARQ processes for NR is 16 for both FDD and TDD. "
             "[TS 38.321 §5.4]"
         )
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         # Create state with relevant chunks
         chunks = [
@@ -80,12 +80,12 @@ class TestGeneratorNode:
         assert result["citations"][0].spec_id == "TS38.321"
         assert result["citations"][0].section == "5.4"
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_filters_irrelevant_chunks(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_filters_irrelevant_chunks(self, mock_create_llm):
         """Test generator only uses relevant chunks."""
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = "The maximum is 16. [TS 38.321 §5.4]"
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         # Create state with mixed relevant and irrelevant chunks
         chunks = [
@@ -126,8 +126,8 @@ class TestGeneratorNode:
         # Irrelevant chunk should NOT be in prompt
         assert "PDCCH" not in prompt
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_multiple_citations(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_multiple_citations(self, mock_create_llm):
         """Test generator extracts multiple citations."""
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = (
@@ -135,7 +135,7 @@ class TestGeneratorNode:
             "The UE shall support carrier aggregation [TS 38.101-1 §5.5A]. "
             "Timer T311 is used for re-establishment [TS 38.331 §5.3.7]."
         )
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         chunks = [
             {
@@ -164,15 +164,15 @@ class TestGeneratorNode:
         assert result["citations"][2].spec_id == "TS38.331"
         assert result["citations"][2].section == "5.3.7"
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_no_citations(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_no_citations(self, mock_create_llm):
         """Test generator handles response with no citations."""
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = (
             "I don't have enough information in the available specifications "
             "to fully answer this question."
         )
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         chunks = [
             {
@@ -189,11 +189,11 @@ class TestGeneratorNode:
         assert "don't have enough information" in result["generation"]
         assert result["citations"] == []
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_empty_graded_chunks(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_empty_graded_chunks(self, mock_create_llm):
         """Test generator handles empty graded chunks."""
         mock_llm = MagicMock()
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         state = create_initial_state("Test question")
         state["graded_chunks"] = []
@@ -208,11 +208,11 @@ class TestGeneratorNode:
         # LLM should not be called when there are no chunks
         mock_llm.invoke.assert_not_called()
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_all_irrelevant_chunks(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_all_irrelevant_chunks(self, mock_create_llm):
         """Test generator handles case where all chunks are irrelevant."""
         mock_llm = MagicMock()
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         chunks = [
             {
@@ -236,12 +236,12 @@ class TestGeneratorNode:
         # LLM should not be called when all chunks are irrelevant
         mock_llm.invoke.assert_not_called()
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_context_formatting(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_context_formatting(self, mock_create_llm):
         """Test generator formats context with source citations."""
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = "Test answer [TS 38.321 §5.4]"
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         chunks = [
             {
@@ -273,12 +273,12 @@ class TestGeneratorNode:
         assert "38.321" in prompt or "TS38.321" in prompt
         assert "38.331" in prompt or "TS38.331" in prompt
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_includes_question_in_prompt(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_includes_question_in_prompt(self, mock_create_llm):
         """Test generator includes question in prompt."""
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = "Answer"
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         question = "What is the maximum number of HARQ processes in NR?"
         chunks = [
@@ -296,15 +296,15 @@ class TestGeneratorNode:
         prompt = invoke_call_args[0][0]
         assert question in prompt
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_citation_with_spaces(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_citation_with_spaces(self, mock_create_llm):
         """Test generator extracts citations with various spacing."""
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = (
             "Info1 [TS 38.321 §5.4] and info2 [TS  38.331  §5.3.7] "
             "and info3 [TS 38.101-1 § 5.5A]"
         )
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         chunks = [{"content": "Test", "relevant": "yes"}]
         state = self._create_state_with_graded_chunks("Test", chunks)
@@ -314,8 +314,8 @@ class TestGeneratorNode:
         # Should extract all citations despite spacing variations
         assert len(result["citations"]) == 3
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_citation_formats(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_citation_formats(self, mock_create_llm):
         """Test generator handles different citation formats."""
         mock_llm = MagicMock()
         # Various valid citation formats
@@ -323,7 +323,7 @@ class TestGeneratorNode:
             "Reference [TS 38.321 §5.4] and [TS 38.331 §5.3.7.1] "
             "and [TS 23.501 §4.2.8.2.3]"
         )
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         chunks = [{"content": "Test", "relevant": "yes"}]
         state = self._create_state_with_graded_chunks("Test", chunks)
@@ -336,12 +336,12 @@ class TestGeneratorNode:
         assert any(c.section == "5.3.7.1" for c in result["citations"])
         assert any(c.section == "4.2.8.2.3" for c in result["citations"])
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_handles_llm_error(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_handles_llm_error(self, mock_create_llm):
         """Test generator handles LLM errors gracefully."""
         mock_llm = MagicMock()
         mock_llm.invoke.side_effect = Exception("LLM API error")
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         chunks = [{"content": "Test", "relevant": "yes"}]
         state = self._create_state_with_graded_chunks("Test question", chunks)
@@ -353,12 +353,12 @@ class TestGeneratorNode:
         assert result["error"] is not None
         assert "error" in result["error"].lower()
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_preserves_other_state_fields(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_preserves_other_state_fields(self, mock_create_llm):
         """Test that generator only modifies generation fields."""
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = "Answer [TS 38.321 §5.4]"
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         chunks = [{"content": "Test", "relevant": "yes"}]
         state = self._create_state_with_graded_chunks("Test question", chunks)
@@ -374,12 +374,12 @@ class TestGeneratorNode:
         assert result["rewrite_count"] == 1
         assert result["average_confidence"] == 0.85
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_citation_raw_format(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_citation_raw_format(self, mock_create_llm):
         """Test that citations preserve raw format."""
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = "Answer [TS 38.321 §5.4]"
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         chunks = [{"content": "Test", "relevant": "yes"}]
         state = self._create_state_with_graded_chunks("Test", chunks)
@@ -390,26 +390,23 @@ class TestGeneratorNode:
         assert len(result["citations"]) == 1
         assert result["citations"][0].raw_citation == "[TS 38.321 §5.4]"
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_uses_correct_settings(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_uses_correct_settings(self, mock_create_llm):
         """Test that generator uses correct LLM settings from config."""
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = "Answer"
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         chunks = [{"content": "Test", "relevant": "yes"}]
         state = self._create_state_with_graded_chunks("Test", chunks)
 
         generator_node(state)
 
-        # Verify HuggingFaceHub was initialized with correct parameters
-        init_call = mock_hf_hub.call_args
-        assert "repo_id" in init_call[1] or len(init_call[0]) > 0
-        assert "huggingfacehub_api_token" in init_call[1]
-        assert "model_kwargs" in init_call[1]
+        # Verify create_llm was called
+        mock_create_llm.assert_called_once()
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_duplicate_citations(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_duplicate_citations(self, mock_create_llm):
         """Test generator handles duplicate citations."""
         mock_llm = MagicMock()
         # Same citation appears twice
@@ -417,7 +414,7 @@ class TestGeneratorNode:
             "HARQ is important [TS 38.321 §5.4]. "
             "As mentioned [TS 38.321 §5.4], it handles retransmissions."
         )
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         chunks = [{"content": "Test", "relevant": "yes"}]
         state = self._create_state_with_graded_chunks("Test", chunks)
@@ -429,12 +426,12 @@ class TestGeneratorNode:
         assert all(c.spec_id == "TS38.321" for c in result["citations"])
         assert all(c.section == "5.4" for c in result["citations"])
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_strips_whitespace(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_strips_whitespace(self, mock_create_llm):
         """Test generator strips whitespace from LLM output."""
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = "  \n  Answer with spacing [TS 38.321 §5.4]  \n  "
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         chunks = [{"content": "Test", "relevant": "yes"}]
         state = self._create_state_with_graded_chunks("Test", chunks)
@@ -444,12 +441,12 @@ class TestGeneratorNode:
         # Should strip leading/trailing whitespace
         assert result["generation"] == "Answer with spacing [TS 38.321 §5.4]"
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_spec_id_normalization(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_spec_id_normalization(self, mock_create_llm):
         """Test generator normalizes spec IDs (removes spaces/dots)."""
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = "Answer [TS 38.321 §5.4]"
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         chunks = [{"content": "Test", "relevant": "yes"}]
         state = self._create_state_with_graded_chunks("Test", chunks)
@@ -459,13 +456,13 @@ class TestGeneratorNode:
         # Spec ID should be normalized (no spaces)
         assert result["citations"][0].spec_id == "TS38.321"
 
-    @patch('specagent.nodes.generator.HuggingFaceHub')
-    def test_generator_handles_non_string_llm_response(self, mock_hf_hub):
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_handles_non_string_llm_response(self, mock_create_llm):
         """Test generator handles non-string LLM response."""
         mock_llm = MagicMock()
         # Mock LLM returns a non-string (e.g., dict or object)
         mock_llm.invoke.return_value = {"text": "Answer with info [TS 38.321 §5.4]"}
-        mock_hf_hub.return_value = mock_llm
+        mock_create_llm.return_value = mock_llm
 
         chunks = [{"content": "Test", "relevant": "yes"}]
         state = self._create_state_with_graded_chunks("Test", chunks)
