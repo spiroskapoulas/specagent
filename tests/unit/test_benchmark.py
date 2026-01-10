@@ -479,3 +479,187 @@ def test_benchmark_question_creation():
     assert question.id == "q1"
     assert question.answer == "42"
     assert question.difficulty == "medium"
+
+
+# =============================================================================
+# Test Confidence Analysis
+# =============================================================================
+
+
+def test_compute_confidence_distribution():
+    """Test confidence distribution computation."""
+    from specagent.evaluation.benchmark import compute_confidence_distribution
+
+    results = [
+        BenchmarkResult(
+            question_id="q1", question="Q1", expected_answer="A1",
+            generated_answer="A1", is_correct=True, confidence=0.95,
+            latency_ms=1000, difficulty="Easy"
+        ),
+        BenchmarkResult(
+            question_id="q2", question="Q2", expected_answer="A2",
+            generated_answer="A2", is_correct=True, confidence=0.85,
+            latency_ms=1000, difficulty="Easy"
+        ),
+        BenchmarkResult(
+            question_id="q3", question="Q3", expected_answer="A3",
+            generated_answer="A3", is_correct=True, confidence=0.75,
+            latency_ms=1000, difficulty="Medium"
+        ),
+        BenchmarkResult(
+            question_id="q4", question="Q4", expected_answer="A4",
+            generated_answer="A4", is_correct=False, confidence=0.45,
+            latency_ms=1000, difficulty="Hard"
+        ),
+        BenchmarkResult(
+            question_id="q5", question="Q5", expected_answer="A5",
+            generated_answer="A5", is_correct=False, confidence=0.25,
+            latency_ms=1000, difficulty="Hard"
+        ),
+    ]
+
+    distribution = compute_confidence_distribution(results)
+
+    # Should have 5 bins: [0.0-0.2), [0.2-0.4), [0.4-0.6), [0.6-0.8), [0.8-1.0]
+    assert len(distribution) == 5
+
+    # Check bins
+    assert distribution["0.0-0.2"] == 0
+    assert distribution["0.2-0.4"] == 1  # q5 at 0.25
+    assert distribution["0.4-0.6"] == 1  # q4 at 0.45
+    assert distribution["0.6-0.8"] == 1  # q3 at 0.75
+    assert distribution["0.8-1.0"] == 2  # q1 at 0.95, q2 at 0.85
+
+
+def test_compute_confidence_distribution_empty():
+    """Test confidence distribution with no results."""
+    from specagent.evaluation.benchmark import compute_confidence_distribution
+
+    distribution = compute_confidence_distribution([])
+
+    assert len(distribution) == 5
+    assert all(count == 0 for count in distribution.values())
+
+
+def test_confidence_statistics():
+    """Test confidence statistics computation."""
+    from specagent.evaluation.benchmark import compute_confidence_stats
+
+    results = [
+        BenchmarkResult(
+            question_id="q1", question="Q1", expected_answer="A1",
+            generated_answer="A1", is_correct=True, confidence=0.9,
+            latency_ms=1000, difficulty="Easy"
+        ),
+        BenchmarkResult(
+            question_id="q2", question="Q2", expected_answer="A2",
+            generated_answer="A2", is_correct=True, confidence=0.8,
+            latency_ms=1000, difficulty="Medium"
+        ),
+        BenchmarkResult(
+            question_id="q3", question="Q3", expected_answer="A3",
+            generated_answer="A3", is_correct=False, confidence=0.5,
+            latency_ms=1000, difficulty="Hard"
+        ),
+    ]
+
+    stats = compute_confidence_stats(results)
+
+    assert stats["mean"] == pytest.approx(0.7333, abs=0.001)
+    assert stats["median"] == 0.8
+    assert stats["min"] == 0.5
+    assert stats["max"] == 0.9
+    assert stats["std"] == pytest.approx(0.2082, abs=0.001)
+
+
+def test_confidence_by_correctness():
+    """Test confidence analysis by answer correctness."""
+    from specagent.evaluation.benchmark import analyze_confidence_by_correctness
+
+    results = [
+        BenchmarkResult(
+            question_id="q1", question="Q1", expected_answer="A1",
+            generated_answer="A1", is_correct=True, confidence=0.9,
+            latency_ms=1000, difficulty="Easy"
+        ),
+        BenchmarkResult(
+            question_id="q2", question="Q2", expected_answer="A2",
+            generated_answer="A2", is_correct=True, confidence=0.85,
+            latency_ms=1000, difficulty="Medium"
+        ),
+        BenchmarkResult(
+            question_id="q3", question="Q3", expected_answer="A3",
+            generated_answer="Wrong", is_correct=False, confidence=0.6,
+            latency_ms=1000, difficulty="Hard"
+        ),
+        BenchmarkResult(
+            question_id="q4", question="Q4", expected_answer="A4",
+            generated_answer="Wrong", is_correct=False, confidence=0.4,
+            latency_ms=1000, difficulty="Hard"
+        ),
+    ]
+
+    analysis = analyze_confidence_by_correctness(results)
+
+    assert analysis["correct"]["mean"] == pytest.approx(0.875, abs=0.001)
+    assert analysis["correct"]["count"] == 2
+    assert analysis["incorrect"]["mean"] == pytest.approx(0.5, abs=0.001)
+    assert analysis["incorrect"]["count"] == 2
+
+
+def test_benchmark_report_includes_confidence_distribution():
+    """Test that BenchmarkReport includes confidence distribution."""
+    result1 = BenchmarkResult(
+        question_id="q1", question="Q1", expected_answer="A1",
+        generated_answer="A1", is_correct=True, confidence=0.9,
+        latency_ms=1000, difficulty="Easy"
+    )
+    result2 = BenchmarkResult(
+        question_id="q2", question="Q2", expected_answer="A2",
+        generated_answer="A2", is_correct=False, confidence=0.5,
+        latency_ms=1000, difficulty="Hard"
+    )
+
+    report = BenchmarkReport(
+        timestamp="2024-01-01T12:00:00",
+        total_questions=2,
+        correct_answers=1,
+        accuracy=0.5,
+        accuracy_by_difficulty={"Easy": 1.0, "Hard": 0.0},
+        average_latency_ms=1000.0,
+        average_confidence=0.7,
+        results=[result1, result2],
+        confidence_distribution={"0.8-1.0": 1, "0.4-0.6": 1},
+        confidence_stats={"mean": 0.7, "median": 0.7, "min": 0.5, "max": 0.9},
+    )
+
+    assert "confidence_distribution" in report.to_dict()
+    assert "confidence_stats" in report.to_dict()
+
+
+def test_benchmark_report_markdown_includes_confidence():
+    """Test that markdown report includes confidence analysis."""
+    result = BenchmarkResult(
+        question_id="q1", question="Q1", expected_answer="A1",
+        generated_answer="A1", is_correct=True, confidence=0.9,
+        latency_ms=1000, difficulty="Easy"
+    )
+
+    report = BenchmarkReport(
+        timestamp="2024-01-01T12:00:00",
+        total_questions=1,
+        correct_answers=1,
+        accuracy=1.0,
+        accuracy_by_difficulty={"Easy": 1.0},
+        average_latency_ms=1000.0,
+        average_confidence=0.9,
+        results=[result],
+        confidence_distribution={"0.8-1.0": 1},
+        confidence_stats={"mean": 0.9, "median": 0.9, "min": 0.9, "max": 0.9, "std": 0.0},
+    )
+
+    markdown = report.to_markdown()
+
+    assert "Confidence Distribution" in markdown
+    assert "0.8-1.0" in markdown
+    assert "Confidence Statistics" in markdown
