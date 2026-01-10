@@ -110,6 +110,64 @@ class CustomEndpointLLM:
             raise last_exception
         raise RuntimeError("All retry attempts failed")
 
+    def health_check(self, timeout: int = 30) -> tuple[bool, str]:
+        """
+        Perform a quick health check on the LLM endpoint.
+
+        Sends a minimal test prompt to verify the endpoint is responsive.
+        Uses a shorter timeout than normal invocations for fast failure detection.
+
+        Args:
+            timeout: Health check timeout in seconds (default: 30s)
+
+        Returns:
+            Tuple of (is_healthy: bool, message: str)
+            - (True, "Endpoint healthy") if successful
+            - (False, error_message) if endpoint is down or unresponsive
+        """
+        test_payload = {
+            "messages": [{"role": "user", "content": "test"}],
+            "temperature": 0.0,
+            "max_tokens": 1,
+        }
+
+        try:
+            logger.info(f"Performing health check on endpoint: {self.endpoint_url}")
+            response = requests.post(
+                self.endpoint_url, json=test_payload, timeout=timeout
+            )
+            response.raise_for_status()
+
+            # Verify response structure
+            result = response.json()
+            if "choices" in result and len(result["choices"]) > 0:
+                logger.info(f"✓ Endpoint health check passed ({response.elapsed.total_seconds():.2f}s)")
+                return True, f"Endpoint healthy (responded in {response.elapsed.total_seconds():.2f}s)"
+            else:
+                error_msg = "Endpoint returned invalid response structure"
+                logger.warning(f"✗ {error_msg}")
+                return False, error_msg
+
+        except requests.Timeout:
+            error_msg = f"Endpoint timed out after {timeout}s"
+            logger.error(f"✗ {error_msg}")
+            return False, error_msg
+
+        except requests.ConnectionError as e:
+            error_msg = f"Connection failed: {str(e)}"
+            logger.error(f"✗ {error_msg}")
+            return False, error_msg
+
+        except requests.HTTPError as e:
+            error_msg = f"HTTP {e.response.status_code}: {e.response.reason}"
+            logger.error(f"✗ {error_msg}")
+            return False, error_msg
+
+        except Exception as e:
+            error_msg = f"Unexpected error: {str(e)}"
+            logger.error(f"✗ {error_msg}")
+            return False, error_msg
+
 
 def create_custom_llm(
     endpoint_url: Optional[str] = None,
@@ -140,3 +198,35 @@ def create_custom_llm(
     return CustomEndpointLLM(
         endpoint_url=endpoint_url, temperature=temperature, max_tokens=max_tokens
     )
+
+
+def check_llm_endpoint_health(timeout: int = 30) -> tuple[bool, str]:
+    """
+    Perform a health check on the configured LLM endpoint.
+
+    This is a convenience function for checking endpoint availability before
+    running benchmarks or other operations that require the LLM.
+
+    Args:
+        timeout: Health check timeout in seconds (default: 30s)
+
+    Returns:
+        Tuple of (is_healthy: bool, message: str)
+
+    Example:
+        >>> is_healthy, msg = check_llm_endpoint_health()
+        >>> if not is_healthy:
+        >>>     print(f"Endpoint unavailable: {msg}")
+        >>>     sys.exit(1)
+    """
+    from specagent.config import settings
+
+    endpoint_url = getattr(
+        settings,
+        "custom_endpoint_url",
+        "http://qwen3-4b-predictor.ml-serving.10.0.1.2.sslip.io:30750/v1/chat/completions",
+    )
+
+    # Create temporary client for health check
+    client = CustomEndpointLLM(endpoint_url=endpoint_url)
+    return client.health_check(timeout=timeout)

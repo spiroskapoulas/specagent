@@ -6,6 +6,8 @@ questions and computes accuracy by difficulty level.
 """
 
 import json
+import statistics
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -53,6 +55,8 @@ class BenchmarkReport:
     average_latency_ms: float
     average_confidence: float
     results: list[BenchmarkResult]
+    confidence_distribution: dict[str, int] = field(default_factory=dict)
+    confidence_stats: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON serialization."""
@@ -64,6 +68,8 @@ class BenchmarkReport:
             "accuracy_by_difficulty": self.accuracy_by_difficulty,
             "average_latency_ms": self.average_latency_ms,
             "average_confidence": self.average_confidence,
+            "confidence_distribution": self.confidence_distribution,
+            "confidence_stats": self.confidence_stats,
             "results": [
                 {
                     "question_id": r.question_id,
@@ -103,16 +109,48 @@ class BenchmarkReport:
             f"| Difficulty | Accuracy |",
             f"|------------|----------|",
         ]
-        
+
         for difficulty, acc in sorted(self.accuracy_by_difficulty.items()):
             lines.append(f"| {difficulty.capitalize()} | {acc:.1%} |")
-        
+
+        # Add confidence analysis section
+        if self.confidence_distribution:
+            lines.extend([
+                f"",
+                f"## Confidence Analysis",
+                f"",
+                f"### Confidence Statistics",
+                f"",
+                f"| Metric | Value |",
+                f"|--------|-------|",
+            ])
+
+            for metric, value in sorted(self.confidence_stats.items()):
+                if metric == "std":
+                    lines.append(f"| Standard Deviation | {value:.3f} |")
+                else:
+                    lines.append(f"| {metric.capitalize()} | {value:.3f} |")
+
+            lines.extend([
+                f"",
+                f"### Confidence Distribution",
+                f"",
+                f"Frequency of confidence scores assigned to generated answers:",
+                f"",
+                f"| Confidence Range | Count | Percentage |",
+                f"|------------------|-------|------------|",
+            ])
+
+            for range_label, count in self.confidence_distribution.items():
+                percentage = (count / self.total_questions * 100) if self.total_questions > 0 else 0
+                lines.append(f"| {range_label} | {count} | {percentage:.1f}% |")
+
         lines.extend([
             f"",
             f"## Failed Questions",
             f"",
         ])
-        
+
         failed = [r for r in self.results if not r.is_correct]
         if failed:
             for r in failed[:10]:  # Limit to first 10
@@ -125,10 +163,12 @@ class BenchmarkReport:
                     f"",
                     f"**Generated:** {r.generated_answer}",
                     f"",
+                    f"**Confidence:** {r.confidence:.2f}",
+                    f"",
                 ])
         else:
             lines.append("No failed questions! 🎉")
-        
+
         return "\n".join(lines)
 
 
@@ -189,10 +229,107 @@ def load_benchmark_questions(path: str | Path) -> list[BenchmarkQuestion]:
     return questions
 
 
+def compute_confidence_distribution(results: list[BenchmarkResult]) -> dict[str, int]:
+    """
+    Compute confidence distribution histogram.
+
+    Groups confidence scores into 5 bins: [0.0-0.2), [0.2-0.4), [0.4-0.6), [0.6-0.8), [0.8-1.0]
+
+    Args:
+        results: List of benchmark results
+
+    Returns:
+        Dictionary mapping bin labels to counts
+    """
+    bins = {
+        "0.0-0.2": 0,
+        "0.2-0.4": 0,
+        "0.4-0.6": 0,
+        "0.6-0.8": 0,
+        "0.8-1.0": 0,
+    }
+
+    for result in results:
+        confidence = result.confidence
+        if confidence < 0.2:
+            bins["0.0-0.2"] += 1
+        elif confidence < 0.4:
+            bins["0.2-0.4"] += 1
+        elif confidence < 0.6:
+            bins["0.4-0.6"] += 1
+        elif confidence < 0.8:
+            bins["0.6-0.8"] += 1
+        else:
+            bins["0.8-1.0"] += 1
+
+    return bins
+
+
+def compute_confidence_stats(results: list[BenchmarkResult]) -> dict[str, float]:
+    """
+    Compute confidence statistics.
+
+    Args:
+        results: List of benchmark results
+
+    Returns:
+        Dictionary with mean, median, min, max, std
+    """
+    if not results:
+        return {
+            "mean": 0.0,
+            "median": 0.0,
+            "min": 0.0,
+            "max": 0.0,
+            "std": 0.0,
+        }
+
+    confidences = [r.confidence for r in results]
+
+    return {
+        "mean": statistics.mean(confidences),
+        "median": statistics.median(confidences),
+        "min": min(confidences),
+        "max": max(confidences),
+        "std": statistics.stdev(confidences) if len(confidences) > 1 else 0.0,
+    }
+
+
+def analyze_confidence_by_correctness(
+    results: list[BenchmarkResult]
+) -> dict[str, dict[str, float]]:
+    """
+    Analyze confidence levels by answer correctness.
+
+    Args:
+        results: List of benchmark results
+
+    Returns:
+        Dictionary with 'correct' and 'incorrect' statistics
+    """
+    correct = [r for r in results if r.is_correct]
+    incorrect = [r for r in results if not r.is_correct]
+
+    correct_confidences = [r.confidence for r in correct] if correct else [0.0]
+    incorrect_confidences = [r.confidence for r in incorrect] if incorrect else [0.0]
+
+    return {
+        "correct": {
+            "mean": statistics.mean(correct_confidences),
+            "count": len(correct),
+        },
+        "incorrect": {
+            "mean": statistics.mean(incorrect_confidences),
+            "count": len(incorrect),
+        },
+    }
+
+
 def run_benchmark(
     questions: list[BenchmarkQuestion],
     limit: int | None = None,
     output_dir: str | Path = "evaluation/results",
+    skip_health_check: bool = False,
 ) -> BenchmarkReport:
     """
     Run benchmark evaluation.
@@ -201,11 +338,33 @@ def run_benchmark(
         questions: List of benchmark questions
         limit: Maximum number of questions to run (for testing)
         output_dir: Directory to save results
+        skip_health_check: Skip LLM endpoint health check (default: False)
 
     Returns:
         BenchmarkReport with all results
+
+    Raises:
+        RuntimeError: If LLM endpoint health check fails
     """
     from specagent.graph.workflow import run_query
+    from specagent.llm.custom_endpoint import check_llm_endpoint_health
+
+    # Perform health check before starting benchmark
+    if not skip_health_check:
+        print("\nPerforming LLM endpoint health check...")
+        is_healthy, message = check_llm_endpoint_health(timeout=30)
+
+        if not is_healthy:
+            error_msg = (
+                f"\n✗ LLM endpoint health check failed: {message}\n"
+                f"  The benchmark cannot proceed with an unavailable endpoint.\n"
+                f"  Please check the endpoint status and try again.\n"
+                f"  To skip this check (not recommended), use --skip-health-check flag."
+            )
+            print(error_msg)
+            raise RuntimeError(f"LLM endpoint unavailable: {message}")
+
+        print(f"✓ {message}\n")
 
     # Apply limit if specified
     if limit is not None:
@@ -322,6 +481,10 @@ def run_benchmark(
         else 0.0
     )
 
+    # Confidence analysis
+    confidence_distribution = compute_confidence_distribution(results)
+    confidence_stats = compute_confidence_stats(results)
+
     # Create report
     timestamp = datetime.now().isoformat()
     report = BenchmarkReport(
@@ -333,6 +496,8 @@ def run_benchmark(
         average_latency_ms=average_latency_ms,
         average_confidence=average_confidence,
         results=results,
+        confidence_distribution=confidence_distribution,
+        confidence_stats=confidence_stats,
     )
 
     # Save results

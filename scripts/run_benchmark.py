@@ -69,6 +69,12 @@ Examples:
         help="Limit number of questions to run (useful for testing)",
     )
 
+    parser.add_argument(
+        "--skip-health-check",
+        action="store_true",
+        help="Skip LLM endpoint health check before running (not recommended)",
+    )
+
     return parser.parse_args()
 
 
@@ -123,6 +129,45 @@ def display_results(report):
                 )
 
         console.print(diff_table)
+        console.print()
+
+    # Confidence analysis
+    if report.confidence_distribution:
+        # Confidence statistics
+        stats_table = Table(
+            title="Confidence Statistics",
+            show_header=True,
+            header_style="bold cyan",
+        )
+        stats_table.add_column("Metric", style="cyan", width=20)
+        stats_table.add_column("Value", style="green", justify="right")
+
+        for metric, value in sorted(report.confidence_stats.items()):
+            label = "Std Dev" if metric == "std" else metric.capitalize()
+            stats_table.add_row(label, f"{value:.3f}")
+
+        console.print(stats_table)
+        console.print()
+
+        # Confidence distribution
+        dist_table = Table(
+            title="Confidence Distribution",
+            show_header=True,
+            header_style="bold cyan",
+        )
+        dist_table.add_column("Range", style="cyan", width=15)
+        dist_table.add_column("Count", style="green", justify="right")
+        dist_table.add_column("Percentage", style="dim", justify="right")
+
+        for range_label, count in report.confidence_distribution.items():
+            percentage = (count / report.total_questions * 100) if report.total_questions > 0 else 0
+            dist_table.add_row(
+                range_label,
+                str(count),
+                f"{percentage:.1f}%",
+            )
+
+        console.print(dist_table)
         console.print()
 
     # Failed questions summary
@@ -184,6 +229,7 @@ def main():
                 questions=questions,
                 limit=args.limit,
                 output_dir=args.output_dir,
+                skip_health_check=args.skip_health_check,
             )
 
         # Display results
