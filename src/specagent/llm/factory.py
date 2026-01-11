@@ -16,9 +16,12 @@ class LLMProtocol(Protocol):
         ...
 
 
-def create_llm() -> LLMProtocol:
+def create_llm(temperature: float | None = None) -> LLMProtocol:
     """
     Create an LLM client based on configuration settings.
+
+    Args:
+        temperature: Optional temperature override (0.0-1.0). If None, uses settings.llm_temperature
 
     Returns:
         LLM client that implements the LLMProtocol
@@ -30,13 +33,16 @@ def create_llm() -> LLMProtocol:
     """
     from specagent.config import settings
 
+    # Use provided temperature or fall back to settings
+    temp = temperature if temperature is not None else settings.llm_temperature
+
     if settings.use_custom_endpoint:
         # Use custom OpenAI-compatible endpoint with retry for serverless cold starts
         from specagent.llm.custom_endpoint import CustomEndpointLLM
 
         return CustomEndpointLLM(
             endpoint_url=settings.custom_endpoint_url,
-            temperature=settings.llm_temperature,
+            temperature=temp,
             max_tokens=settings.llm_max_tokens,
             timeout=120,  # 2 minute timeout for slow inference
             max_retries=5,  # Retry up to 5 times for serverless cold starts
@@ -57,7 +63,7 @@ def create_llm() -> LLMProtocol:
         return HuggingFaceEndpoint(
             repo_id=settings.llm_model,
             huggingfacehub_api_token=settings.hf_api_key_value,
-            temperature=settings.llm_temperature,
+            temperature=temp,
             max_new_tokens=settings.llm_max_tokens,
         )
 

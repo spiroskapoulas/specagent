@@ -402,8 +402,8 @@ class TestGeneratorNode:
 
         generator_node(state)
 
-        # Verify create_llm was called
-        mock_create_llm.assert_called_once()
+        # Verify create_llm was called with temperature=0.0 for deterministic outputs
+        mock_create_llm.assert_called_once_with(temperature=0.0)
 
     @patch('specagent.nodes.generator.create_llm')
     def test_generator_duplicate_citations(self, mock_create_llm):
@@ -474,3 +474,272 @@ class TestGeneratorNode:
         assert isinstance(result["generation"], str)
         # Should still extract citations from the string representation
         assert len(result["citations"]) >= 0
+
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_sorts_chunks_by_similarity(self, mock_create_llm):
+        """Test generator sorts chunks by similarity score descending."""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = "Answer [TS 38.321 §5.4]"
+        mock_create_llm.return_value = mock_llm
+
+        # Create chunks with different similarity scores
+        chunks = [
+            {
+                "content": "Low similarity chunk",
+                "spec_id": "TS38.331",
+                "section": "5.1",
+                "similarity_score": 0.6,
+                "relevant": "yes"
+            },
+            {
+                "content": "High similarity chunk",
+                "spec_id": "TS38.321",
+                "section": "5.4",
+                "similarity_score": 0.95,
+                "relevant": "yes"
+            },
+            {
+                "content": "Medium similarity chunk",
+                "spec_id": "TS38.211",
+                "section": "7.3",
+                "similarity_score": 0.75,
+                "relevant": "yes"
+            }
+        ]
+        state = self._create_state_with_graded_chunks("Test question", chunks)
+
+        generator_node(state)
+
+        # Verify chunks are passed to LLM in sorted order (highest similarity first)
+        invoke_call_args = mock_llm.invoke.call_args
+        prompt = invoke_call_args[0][0]
+
+        # High similarity chunk should appear before medium and low
+        high_pos = prompt.find("High similarity chunk")
+        medium_pos = prompt.find("Medium similarity chunk")
+        low_pos = prompt.find("Low similarity chunk")
+
+        assert high_pos < medium_pos
+        assert medium_pos < low_pos
+
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_limits_to_top2_when_high_confidence(self, mock_create_llm):
+        """Test generator limits to top-2 chunks when average_confidence > 0.8."""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = "Answer [TS 38.321 §5.4]"
+        mock_create_llm.return_value = mock_llm
+
+        # Create 4 chunks with high confidence
+        chunks = [
+            {
+                "content": "Chunk 1",
+                "similarity_score": 0.95,
+                "confidence": 0.9,
+                "relevant": "yes"
+            },
+            {
+                "content": "Chunk 2",
+                "similarity_score": 0.90,
+                "confidence": 0.85,
+                "relevant": "yes"
+            },
+            {
+                "content": "Chunk 3",
+                "similarity_score": 0.85,
+                "confidence": 0.9,
+                "relevant": "yes"
+            },
+            {
+                "content": "Chunk 4",
+                "similarity_score": 0.80,
+                "confidence": 0.88,
+                "relevant": "yes"
+            }
+        ]
+        state = self._create_state_with_graded_chunks("Test question", chunks)
+        state["average_confidence"] = 0.88  # High confidence (> 0.8)
+
+        generator_node(state)
+
+        # Verify only top-2 chunks are in prompt (optimization)
+        invoke_call_args = mock_llm.invoke.call_args
+        prompt = invoke_call_args[0][0]
+
+        assert "Chunk 1" in prompt
+        assert "Chunk 2" in prompt
+        assert "Chunk 3" not in prompt  # Should be excluded
+        assert "Chunk 4" not in prompt  # Should be excluded
+
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_no_limit_when_low_confidence(self, mock_create_llm):
+        """Test generator uses all chunks when average_confidence <= 0.8."""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = "Answer [TS 38.321 §5.4]"
+        mock_create_llm.return_value = mock_llm
+
+        # Create 4 chunks with low confidence
+        chunks = [
+            {
+                "content": "Chunk 1",
+                "similarity_score": 0.85,
+                "confidence": 0.7,
+                "relevant": "yes"
+            },
+            {
+                "content": "Chunk 2",
+                "similarity_score": 0.80,
+                "confidence": 0.75,
+                "relevant": "yes"
+            },
+            {
+                "content": "Chunk 3",
+                "similarity_score": 0.75,
+                "confidence": 0.8,
+                "relevant": "yes"
+            },
+            {
+                "content": "Chunk 4",
+                "similarity_score": 0.70,
+                "confidence": 0.72,
+                "relevant": "yes"
+            }
+        ]
+        state = self._create_state_with_graded_chunks("Test question", chunks)
+        state["average_confidence"] = 0.75  # Low confidence (<= 0.8)
+
+        generator_node(state)
+
+        # Verify all chunks are in prompt (no limiting)
+        invoke_call_args = mock_llm.invoke.call_args
+        prompt = invoke_call_args[0][0]
+
+        assert "Chunk 1" in prompt
+        assert "Chunk 2" in prompt
+        assert "Chunk 3" in prompt
+        assert "Chunk 4" in prompt
+
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_no_limit_when_exactly_2_chunks(self, mock_create_llm):
+        """Test generator uses all chunks when there are exactly 2 chunks."""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = "Answer [TS 38.321 §5.4]"
+        mock_create_llm.return_value = mock_llm
+
+        # Create exactly 2 chunks
+        chunks = [
+            {
+                "content": "Chunk 1",
+                "similarity_score": 0.95,
+                "confidence": 0.9,
+                "relevant": "yes"
+            },
+            {
+                "content": "Chunk 2",
+                "similarity_score": 0.90,
+                "confidence": 0.85,
+                "relevant": "yes"
+            }
+        ]
+        state = self._create_state_with_graded_chunks("Test question", chunks)
+        state["average_confidence"] = 0.88  # High confidence but only 2 chunks
+
+        generator_node(state)
+
+        # Verify both chunks are in prompt (no limiting needed)
+        invoke_call_args = mock_llm.invoke.call_args
+        prompt = invoke_call_args[0][0]
+
+        assert "Chunk 1" in prompt
+        assert "Chunk 2" in prompt
+
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_uses_shortened_prompt(self, mock_create_llm):
+        """Test generator uses the new shortened prompt format."""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = "Answer [TS 38.321 §5.4]"
+        mock_create_llm.return_value = mock_llm
+
+        chunks = [{"content": "Test content", "relevant": "yes"}]
+        state = self._create_state_with_graded_chunks("Test question", chunks)
+
+        generator_node(state)
+
+        # Verify prompt uses new concise format (not old multi-step format)
+        invoke_call_args = mock_llm.invoke.call_args
+        prompt = invoke_call_args[0][0]
+
+        # New prompt should have these elements
+        assert "3GPP expert" in prompt
+        assert "Answer precisely from context" in prompt
+        assert "Extract exact values/units/terms" in prompt
+
+        # Old prompt should NOT have these verbose elements
+        assert "STEP 1" not in prompt
+        assert "STEP 2" not in prompt
+        assert "STEP 3" not in prompt
+        assert "STEP 4" not in prompt
+        assert "STEP 5" not in prompt
+
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_limits_at_exactly_0_8_confidence(self, mock_create_llm):
+        """Test generator behavior at confidence boundary (0.8)."""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = "Answer [TS 38.321 §5.4]"
+        mock_create_llm.return_value = mock_llm
+
+        # Create 4 chunks with confidence exactly at 0.8
+        chunks = [
+            {
+                "content": "Chunk 1",
+                "similarity_score": 0.95,
+                "relevant": "yes"
+            },
+            {
+                "content": "Chunk 2",
+                "similarity_score": 0.90,
+                "relevant": "yes"
+            },
+            {
+                "content": "Chunk 3",
+                "similarity_score": 0.85,
+                "relevant": "yes"
+            }
+        ]
+        state = self._create_state_with_graded_chunks("Test question", chunks)
+        state["average_confidence"] = 0.8  # Exactly 0.8 (not > 0.8)
+
+        generator_node(state)
+
+        # At exactly 0.8, should NOT limit (only limit when > 0.8)
+        invoke_call_args = mock_llm.invoke.call_args
+        prompt = invoke_call_args[0][0]
+
+        assert "Chunk 1" in prompt
+        assert "Chunk 2" in prompt
+        assert "Chunk 3" in prompt
+
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_handles_missing_average_confidence(self, mock_create_llm):
+        """Test generator handles missing average_confidence field."""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = "Answer [TS 38.321 §5.4]"
+        mock_create_llm.return_value = mock_llm
+
+        # Create chunks but don't set average_confidence
+        chunks = [
+            {"content": "Chunk 1", "similarity_score": 0.95, "relevant": "yes"},
+            {"content": "Chunk 2", "similarity_score": 0.90, "relevant": "yes"},
+            {"content": "Chunk 3", "similarity_score": 0.85, "relevant": "yes"}
+        ]
+        state = self._create_state_with_graded_chunks("Test question", chunks)
+        # Don't set average_confidence - should default to 0.0
+
+        generator_node(state)
+
+        # Should use all chunks (since default 0.0 is not > 0.8)
+        invoke_call_args = mock_llm.invoke.call_args
+        prompt = invoke_call_args[0][0]
+
+        assert "Chunk 1" in prompt
+        assert "Chunk 2" in prompt
+        assert "Chunk 3" in prompt

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from specagent.graph.state import GraphState
 
 
-GENERATOR_PROMPT = """You are a 3GPP specification expert assistant. Your task is to extract precise answers from 3GPP specification context.
+GENERATOR_PROMPT = """You are a 3GPP expert. Answer precisely from context.
 
 Question: {question}
 
@@ -23,45 +23,10 @@ Context (from 3GPP specifications):
 {context}
 ---
 
-Instructions - Follow these steps:
-
-STEP 1 - SEARCH: Review each numbered chunk to identify which contain information relevant to the question.
-- Look for exact parameter names, values, units, and technical terms
-- Note chunk numbers that contain relevant information
-
-STEP 2 - EXTRACT: Extract the specific answer from the relevant chunks.
-- For numerical parameters: Extract the exact value WITH units (e.g., "160 ms", "25 m", "9 dB")
-- For technical terms: Extract exact terminology as stated in the specification
-- For descriptive answers: Synthesize information from multiple chunks if needed
-
-STEP 3 - VERIFY: Cross-check your answer against the original chunks.
-- Ensure the answer is directly stated or clearly implied in the context
-- Verify units and numerical values are correct
-- Confirm you haven't added information not present in the chunks
-
-STEP 4 - CITE: Add inline citations for every claim.
-- REQUIRED: Every statement MUST have a citation in format [TS XX.XXX §Y.Z]
-- Use the exact source references from the chunk headers
-- If information comes from multiple chunks, cite all relevant sources
-
-STEP 5 - RESPOND: Provide your final answer.
-- Start with the direct answer to the question
-- Include supporting details if helpful
-- ALL citations MUST be inline using [TS XX.XXX §Y.Z] format
-
-CRITICAL RULES:
-✓ Answer ONLY from the provided context - NO external knowledge
-✓ ALWAYS cite sources - every claim needs [TS XX.XXX §Y.Z]
-✓ Extract exact values with units for numerical parameters
-✓ Say "I don't have enough information" ONLY if:
-  - The question asks for information completely absent from all chunks
-  - The chunks discuss related but different topics
-  - You cannot find the specific parameter, value, or term requested
-
-✗ DO NOT say "insufficient information" if:
-  - The answer is present but requires reading multiple chunks
-  - The information is stated in technical terminology
-  - The value is embedded in a table or formula
+Rules:
+- Extract exact values/units/terms and cite inline: [TS XX.XXX §Y.Z]
+- Every claim must be cited; no external knowledge
+- If information is absent: "I don't have enough information"
 
 Answer:"""
 
@@ -95,6 +60,12 @@ def generator_node(state: "GraphState") -> "GraphState":
         gc.chunk for gc in graded_chunks if gc.relevant == "yes"
     ]
 
+    # Optimization: Sort by similarity descending, take top-2 if high confidence
+    relevant_chunks.sort(key=lambda c: c.similarity_score, reverse=True)
+    avg_conf = state.get("average_confidence", 0.0)
+    if avg_conf > 0.8 and len(relevant_chunks) > 2:
+        relevant_chunks = relevant_chunks[:2]  # Reduce context tokens ~50%
+
     # Handle case where no relevant chunks are available
     if not relevant_chunks:
         state["generation"] = (
@@ -115,7 +86,8 @@ def generator_node(state: "GraphState") -> "GraphState":
         context = "\n\n".join(context_parts)
 
         # Initialize LLM (auto-selects based on config)
-        llm = create_llm()
+        # Use temperature=0.0 for deterministic outputs
+        llm = create_llm(temperature=0.0)
 
         # Format prompt with question and context
         prompt = GENERATOR_PROMPT.format(
