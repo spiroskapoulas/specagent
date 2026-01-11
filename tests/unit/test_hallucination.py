@@ -1,5 +1,6 @@
 """Unit tests for hallucination checker node."""
 
+import re
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -503,6 +504,48 @@ class TestContainsNumericalOrTabularContent:
         assert _contains_numerical_or_tabular_content("The ratio is 3.14")
         assert _contains_numerical_or_tabular_content("Value: 0.5")
 
+    def test_ignores_spec_citations(self):
+        """Test that spec citations like [TS 38.321] are ignored."""
+        assert not _contains_numerical_or_tabular_content(
+            "According to [TS 38.321], the MAC layer handles HARQ."
+        )
+        assert not _contains_numerical_or_tabular_content(
+            "See [TS 23.501] for more details."
+        )
+
+    def test_ignores_spec_citations_with_section(self):
+        """Test that spec citations with section numbers are ignored."""
+        assert not _contains_numerical_or_tabular_content(
+            "As specified in [TS 38.321 §5.4], the procedure is defined."
+        )
+        assert not _contains_numerical_or_tabular_content(
+            "Reference [TS 38.321 §5.4.1] describes the behavior."
+        )
+
+    def test_ignores_spec_citations_case_insensitive(self):
+        """Test that spec citations are ignored regardless of case."""
+        assert not _contains_numerical_or_tabular_content(
+            "According to [ts 38.321], this is specified."
+        )
+        assert not _contains_numerical_or_tabular_content(
+            "See [Ts 23.501] for details."
+        )
+
+    def test_detects_numbers_with_citations_present(self):
+        """Test that actual numbers are still detected even with citations."""
+        assert _contains_numerical_or_tabular_content(
+            "According to [TS 38.321], the maximum is 16 HARQ processes."
+        )
+        assert _contains_numerical_or_tabular_content(
+            "The value is 100ms as per [TS 38.214]."
+        )
+
+    def test_mixed_citations_and_text(self):
+        """Test text with only citations and no other numbers."""
+        assert not _contains_numerical_or_tabular_content(
+            "See [TS 38.321] and [TS 38.214] for protocol details."
+        )
+
 
 @pytest.mark.unit
 class TestHallucinationCheckConditional:
@@ -619,13 +662,13 @@ class TestHallucinationCheckConditional:
 
     @patch("specagent.nodes.hallucination.create_llm")
     def test_run_check_boundary_confidence_no_numbers(self, mock_create_llm):
-        """Test hallucination check runs at confidence boundary (0.65) without numbers."""
+        """Test hallucination check runs at confidence boundary (0.7) without numbers."""
         mock_llm = MagicMock()
         mock_create_llm.return_value = mock_llm
 
         generation = "This is a descriptive answer without numbers."
         state = self._create_state_with_generation_and_confidence(
-            generation=generation, average_confidence=0.65
+            generation=generation, average_confidence=0.7
         )
 
         result = hallucination_check_node(state)
@@ -644,7 +687,7 @@ class TestHallucinationCheckConditional:
         generation = "This is a descriptive answer."
         chunks = [{"content": "Some context"}]
         state = self._create_state_with_generation_and_confidence(
-            generation=generation, average_confidence=0.64, chunks_data=chunks
+            generation=generation, average_confidence=0.69, chunks_data=chunks
         )
 
         result = hallucination_check_node(state)
@@ -688,3 +731,76 @@ class TestHallucinationCheckConditional:
         # Should run check due to numerical content
         mock_llm.invoke.assert_called_once()
         assert result["hallucination_check"] == "grounded"
+
+    @patch("specagent.nodes.hallucination.create_llm")
+    @patch("specagent.nodes.hallucination.re.search")
+    def test_no_chunks_json_parse_fallback(self, mock_re_search, mock_create_llm):
+        """Test fallback to direct json.loads when regex doesn't match (no chunks)."""
+        # Mock regex search to return None (no match)
+        mock_re_search.return_value = None
+
+        mock_llm = MagicMock()
+        # Return valid JSON that somehow regex didn't match (defensive code path)
+        mock_llm.invoke.return_value = '{"grounded": "yes", "ungrounded_claims": []}'
+        mock_create_llm.return_value = mock_llm
+
+        state = create_initial_state("Test question")
+        state["generation"] = "Some answer with 42 numbers."
+        state["graded_chunks"] = []
+        state["average_confidence"] = 0.5
+
+        result = hallucination_check_node(state)
+
+        assert result["hallucination_check"] == "grounded"
+        assert result["ungrounded_claims"] == []
+
+    @patch("specagent.nodes.hallucination.create_llm")
+    @patch("specagent.nodes.hallucination.re.search")
+    def test_with_chunks_json_parse_fallback(self, mock_re_search, mock_create_llm):
+        """Test fallback to direct json.loads when regex doesn't match (with chunks)."""
+        # Mock regex search to return None (no match) for the second call
+        # First call is for citation pattern in _contains_numerical_or_tabular_content
+        # We need to handle multiple re.search calls
+        def search_side_effect(pattern, text, *args):
+            if pattern == r'\[TS\s+\d+\.\d+[^\]]*\]':
+                # Citation pattern - return None (no citations)
+                return None
+            elif pattern == r'\{.*\}':
+                # JSON pattern - return None to trigger fallback
+                return None
+            else:
+                # Other patterns - use real search
+                return re.search(pattern, text, *args) if args else re.search(pattern, text)
+
+        mock_re_search.side_effect = search_side_effect
+
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = '{"grounded": "yes", "ungrounded_claims": []}'
+        mock_create_llm.return_value = mock_llm
+
+        chunks = [{"content": "Test content"}]
+        state = create_initial_state("Test?")
+        state["generation"] = "Answer with 5 numbers"
+        state["average_confidence"] = 0.9
+
+        retrieved_chunks = [
+            RetrievedChunk(
+                content=chunk["content"],
+                spec_id="TS38.321",
+                section="5.4",
+                similarity_score=0.8,
+                chunk_id=f"chunk_{i}",
+                source_file="TS38.321.md",
+            )
+            for i, chunk in enumerate(chunks)
+        ]
+        state["retrieved_chunks"] = retrieved_chunks
+        state["graded_chunks"] = [
+            GradedChunk(chunk=chunk, relevant="yes", confidence=0.85)
+            for chunk in retrieved_chunks
+        ]
+
+        result = hallucination_check_node(state)
+
+        assert result["hallucination_check"] == "grounded"
+        assert result["ungrounded_claims"] == []

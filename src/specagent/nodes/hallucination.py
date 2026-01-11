@@ -5,7 +5,7 @@ Uses LLM-as-judge to compare the generated answer against source chunks
 and identify any claims not supported by the retrieved context.
 
 Hallucination check is optional and only runs when:
-1. average_confidence < 0.65 after generation, OR
+1. average_confidence < 0.7 after generation, OR
 2. generation contains numerical values or tables
 """
 
@@ -33,8 +33,7 @@ class HallucinationResult(BaseModel):
 
 
 HALLUCINATION_PROMPT = """You are a fact-checker for a 3GPP specification assistant.
-Your job is to verify that every factual claim in the generated answer is supported
-by the source documents.
+Verify that every factual claim in the generated answer is supported by the source documents.
 
 Source documents:
 ---
@@ -46,25 +45,22 @@ Generated answer:
 {answer}
 ---
 
-Carefully verify each factual claim in the answer:
-1. Is every technical detail (numbers, parameters, procedures) found in the sources?
-2. Are any claims made that go beyond what the sources state?
-3. Are any specifications or section numbers cited that don't match the sources?
+Verify all claims are grounded in the sources. Check that technical details, parameters, and citations match the provided documents.
 
-Respond with ONLY a JSON object in this exact format:
+Respond with ONLY a JSON object:
 {{"grounded": "yes", "ungrounded_claims": []}}
-or
 {{"grounded": "partial", "ungrounded_claims": ["claim 1", "claim 2"]}}
-or
-{{"grounded": "no", "ungrounded_claims": ["claim 1", "claim 2", "claim 3"]}}
+{{"grounded": "no", "ungrounded_claims": ["claim 1", "claim 2"]}}
 
-Where grounded is "yes" if all claims are fully supported, "partial" if most claims are supported,
-or "no" if significant claims are not supported."""
+Use "yes" if fully supported, "partial" if mostly supported, or "no" if significantly unsupported."""
 
 
 def _contains_numerical_or_tabular_content(text: str) -> bool:
     """
     Detect if text contains numerical values or table-like structures.
+
+    Ignores specification citations like [TS 38.XXX] which are not considered
+    numerical content requiring hallucination verification.
 
     Args:
         text: The generated text to analyze
@@ -72,6 +68,13 @@ def _contains_numerical_or_tabular_content(text: str) -> bool:
     Returns:
         True if text contains numbers or tables, False otherwise
     """
+    # Pattern for spec citations to ignore: [TS 38.XXX], [TS XX.XXX], etc.
+    # Examples: [TS 38.321], [TS 23.501 §5.4]
+    citation_pattern = re.compile(r'\[TS\s+\d+\.\d+[^\]]*\]', re.IGNORECASE)
+
+    # Remove citations from text before checking for numerical content
+    text_without_citations = citation_pattern.sub('', text)
+
     # Pattern for numerical values (integers, floats, percentages, ranges)
     # Examples: 5, 3.14, 50%, 5-10, 1..10, 100ms, 2.4GHz
     number_pattern = re.compile(
@@ -85,8 +88,8 @@ def _contains_numerical_or_tabular_content(text: str) -> bool:
     # Pattern for markdown tables (lines with multiple | characters)
     table_pattern = re.compile(r'^[\s]*\|[^|]*\|[^|]*\|', re.MULTILINE)
 
-    # Check for numerical content
-    if number_pattern.search(text):
+    # Check for numerical content (after removing citations)
+    if number_pattern.search(text_without_citations):
         return True
 
     # Check for table structures
@@ -101,7 +104,7 @@ def hallucination_check_node(state: "GraphState") -> "GraphState":
     Check if generated answer is grounded in source documents.
 
     Only runs hallucination check when:
-    1. average_confidence < 0.65 after generation, OR
+    1. average_confidence < 0.7 after generation, OR
     2. generation contains numerical values or tables
 
     Args:
@@ -125,7 +128,7 @@ def hallucination_check_node(state: "GraphState") -> "GraphState":
     has_numerical_content = _contains_numerical_or_tabular_content(generation)
 
     # Skip hallucination check if confidence is high AND no numerical/tabular content
-    if average_confidence >= 0.65 and not has_numerical_content:
+    if average_confidence >= 0.7 and not has_numerical_content:
         state["hallucination_check"] = "grounded"
         state["ungrounded_claims"] = []
         return state
