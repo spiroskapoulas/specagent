@@ -39,25 +39,15 @@ class BatchGradeResult(BaseModel):
     )
 
 
-BATCH_GRADER_PROMPT = """You are a grader assessing relevance of retrieved document chunks
-to a user question about 3GPP telecommunications specifications.
+BATCH_GRADER_PROMPT = """Assess relevance of document chunks to the question.
 
 Question: {question}
 
-You are given {num_chunks} document chunks to grade. For EACH chunk, determine if it contains
-information relevant to answering the question. Consider: exact matches, related concepts, prerequisite information.
-
-Document chunks:
+Document chunks ({num_chunks}):
 {documents}
 
-Respond with ONLY a JSON object with a "grades" array containing one grade per chunk IN THE SAME ORDER:
-{{"grades": [
-  {{"relevant": "yes", "confidence": 0.85}},
-  {{"relevant": "no", "confidence": 0.2}},
-  ...
-]}}
-
-You must provide exactly {num_chunks} grades. Each confidence must be between 0.0 and 1.0."""
+Return JSON: {{"grades": [{{"relevant": "yes"/"no", "confidence": 0.0-1.0}}, ...]}}
+Provide exactly {num_chunks} grades in order."""
 
 
 def grader_node(state: "GraphState") -> "GraphState":
@@ -65,7 +55,10 @@ def grader_node(state: "GraphState") -> "GraphState":
     Grade retrieved chunks for relevance to the query.
 
     Grades only the top-3 chunks (by similarity score) for latency optimization.
-    Retriever fetches 10 chunks, but we only grade the most promising ones.
+    Uses similarity-based auto-grading to skip LLM calls when possible:
+    - similarity > 0.85: auto "yes" with high confidence
+    - similarity < 0.5: auto "no" with high confidence
+    - similarity 0.5-0.85: use LLM for accurate assessment
 
     Args:
         state: Current graph state with retrieved_chunks populated
@@ -89,54 +82,92 @@ def grader_node(state: "GraphState") -> "GraphState":
         return state
 
     try:
-        # Initialize LLM (auto-selects based on config)
-        llm = create_llm()
-
-        import json
-        import re
-
-        # Format chunks to grade into a single prompt
-        documents_text = ""
-        for i, chunk in enumerate(chunks_to_grade, 1):
-            documents_text += f"\n--- Chunk {i} ---\n{chunk.content}\n"
-
-        # Create batch grading prompt
-        prompt = BATCH_GRADER_PROMPT.format(
-            question=question,
-            num_chunks=len(chunks_to_grade),
-            documents=documents_text
-        )
-
-        # Single LLM call to grade all chunks at once
-        response = llm.invoke(prompt)
-
-        # Parse batch JSON response
-        json_match = re.search(r'\{.*\}', response, re.DOTALL)
-        if json_match:
-            json_str = json_match.group(0)
-            parsed = json.loads(json_str)
-            batch_result = BatchGradeResult(**parsed)
-        else:
-            batch_result = BatchGradeResult(**json.loads(response))
-
-        # Verify we got the right number of grades
-        if len(batch_result.grades) != len(chunks_to_grade):
-            raise ValueError(
-                f"Expected {len(chunks_to_grade)} grades but got {len(batch_result.grades)}"
-            )
-
-        # Create GradedChunk objects from batch results
+        # Separate chunks into auto-gradable and LLM-required
         graded_chunks = []
+        llm_chunks = []  # Chunks needing LLM grading
+        llm_chunk_indices = []  # Track original positions
         total_confidence = 0.0
 
-        for chunk, grade in zip(chunks_to_grade, batch_result.grades):
-            graded_chunk = GradedChunk(
-                chunk=chunk,
-                relevant=grade.relevant,
-                confidence=grade.confidence
+        for i, chunk in enumerate(chunks_to_grade):
+            if chunk.similarity_score > 0.85:
+                # Auto-grade as relevant with high confidence
+                grade = GradeResult(
+                    relevant="yes",
+                    confidence=min(1.0, chunk.similarity_score + 0.1)
+                )
+                graded_chunk = GradedChunk(
+                    chunk=chunk,
+                    relevant=grade.relevant,
+                    confidence=grade.confidence
+                )
+                graded_chunks.append(graded_chunk)
+                total_confidence += grade.confidence
+            elif chunk.similarity_score < 0.5:
+                # Auto-grade as not relevant with high confidence
+                grade = GradeResult(
+                    relevant="no",
+                    confidence=1.0 - chunk.similarity_score
+                )
+                graded_chunk = GradedChunk(
+                    chunk=chunk,
+                    relevant=grade.relevant,
+                    confidence=grade.confidence
+                )
+                graded_chunks.append(graded_chunk)
+                total_confidence += grade.confidence
+            else:
+                # Mid-range similarity: needs LLM grading
+                llm_chunks.append(chunk)
+                llm_chunk_indices.append(i)
+                # Placeholder to maintain order
+                graded_chunks.append(None)
+
+        # If there are chunks requiring LLM grading, process them in batch
+        if llm_chunks:
+            import json
+            import re
+
+            llm = create_llm()
+
+            # Format chunks for LLM grading
+            documents_text = ""
+            for i, chunk in enumerate(llm_chunks, 1):
+                documents_text += f"\n--- Chunk {i} ---\n{chunk.content}\n"
+
+            # Create batch grading prompt
+            prompt = BATCH_GRADER_PROMPT.format(
+                question=question,
+                num_chunks=len(llm_chunks),
+                documents=documents_text
             )
-            graded_chunks.append(graded_chunk)
-            total_confidence += grade.confidence
+
+            # Single LLM call to grade uncertain chunks
+            response = llm.invoke(prompt)
+
+            # Parse batch JSON response
+            json_match = re.search(r'\{.*\}', response, re.DOTALL)
+            if json_match:
+                json_str = json_match.group(0)
+                parsed = json.loads(json_str)
+                batch_result = BatchGradeResult(**parsed)
+            else:
+                batch_result = BatchGradeResult(**json.loads(response))
+
+            # Verify we got the right number of grades
+            if len(batch_result.grades) != len(llm_chunks):
+                raise ValueError(
+                    f"Expected {len(llm_chunks)} grades but got {len(batch_result.grades)}"
+                )
+
+            # Insert LLM-graded chunks into their original positions
+            for chunk, grade, idx in zip(llm_chunks, batch_result.grades, llm_chunk_indices):
+                graded_chunk = GradedChunk(
+                    chunk=chunk,
+                    relevant=grade.relevant,
+                    confidence=grade.confidence
+                )
+                graded_chunks[idx] = graded_chunk
+                total_confidence += grade.confidence
 
         # Calculate average confidence
         average_confidence = total_confidence / len(graded_chunks)
