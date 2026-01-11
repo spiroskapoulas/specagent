@@ -29,6 +29,16 @@ Consider:
 - Specifying the protocol layer or interface
 - Using terminology from 3GPP TS documents
 
+Examples:
+Original: "What is handover?"
+Rewrite: "RRC connection reconfiguration procedure for X2 handover in 5G NR"
+
+Original: "DRX cycle?"
+Rewrite: "Discontinuous Reception (DRX) cycle configuration parameters in TS 38.331"
+
+Original: "HARQ process?"
+Rewrite: "Hybrid Automatic Repeat Request (HARQ) process configuration and timing in NR physical layer TS 38.214"
+
 Provide only the rewritten question, nothing else."""
 
 
