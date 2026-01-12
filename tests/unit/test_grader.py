@@ -320,7 +320,7 @@ class TestGraderNode:
 
         # Create 5 chunks but only top-3 will be graded (mid-range similarity to trigger LLM)
         chunks = [
-            {"content": f"Chunk {i}", "similarity_score": 0.5 + i*0.05} for i in range(5)
+            {"content": f"Chunk {i}", "similarity_score": 0.55 + i*0.05} for i in range(5)
         ]
         state = self._create_state_with_chunks("Test question", chunks)
 
@@ -334,7 +334,7 @@ class TestGraderNode:
 
     @patch('specagent.nodes.grader.create_llm')
     def test_grader_auto_grade_high_similarity(self, mock_create_llm):
-        """Test auto-grading for chunks with similarity > 0.85."""
+        """Test auto-grading for chunks with similarity > 0.82."""
         mock_llm = MagicMock()
         mock_create_llm.return_value = mock_llm
 
@@ -355,14 +355,14 @@ class TestGraderNode:
         assert len(result["graded_chunks"]) == 3
         assert all(gc.relevant == "yes" for gc in result["graded_chunks"])
 
-        # Verify confidence scores (should be similarity_score + 0.1, capped at 1.0)
-        assert result["graded_chunks"][0].confidence == 1.0  # min(1.0, 0.90 + 0.1)
-        assert result["graded_chunks"][1].confidence == pytest.approx(0.97)  # 0.87 + 0.1
-        assert result["graded_chunks"][2].confidence == 1.0  # min(1.0, 0.95 + 0.1)
+        # Verify confidence scores (should equal similarity_score)
+        assert result["graded_chunks"][0].confidence == pytest.approx(0.90)
+        assert result["graded_chunks"][1].confidence == pytest.approx(0.87)
+        assert result["graded_chunks"][2].confidence == pytest.approx(0.95)
 
     @patch('specagent.nodes.grader.create_llm')
     def test_grader_auto_grade_low_similarity(self, mock_create_llm):
-        """Test auto-grading for chunks with similarity < 0.5."""
+        """Test auto-grading for chunks with similarity < 0.55."""
         mock_llm = MagicMock()
         mock_create_llm.return_value = mock_llm
 
@@ -414,21 +414,21 @@ class TestGraderNode:
         # Verify all chunks are graded
         assert len(result["graded_chunks"]) == 3
 
-        # First chunk: auto-graded as yes (high similarity)
+        # First chunk: auto-graded as yes (high similarity > 0.82)
         assert result["graded_chunks"][0].relevant == "yes"
-        assert result["graded_chunks"][0].confidence == 1.0  # min(1.0, 0.90 + 0.1)
+        assert result["graded_chunks"][0].confidence == pytest.approx(0.90)
 
         # Second chunk: LLM-graded (mid similarity)
         assert result["graded_chunks"][1].relevant == "yes"
         assert result["graded_chunks"][1].confidence == 0.75
 
-        # Third chunk: auto-graded as no (low similarity)
+        # Third chunk: auto-graded as no (low similarity < 0.55)
         assert result["graded_chunks"][2].relevant == "no"
         assert result["graded_chunks"][2].confidence == pytest.approx(0.6)  # 1 - 0.4
 
     @patch('specagent.nodes.grader.create_llm')
     def test_grader_mid_range_similarity_uses_llm(self, mock_create_llm):
-        """Test that mid-range similarity (0.5-0.85) always uses LLM."""
+        """Test that mid-range similarity (0.55-0.82) always uses LLM."""
         from specagent.nodes.grader import BatchGradeResult
 
         mock_llm = MagicMock()
@@ -436,7 +436,7 @@ class TestGraderNode:
         mock_llm.invoke.return_value = '{"grades": [{"relevant": "yes", "confidence": 0.8}, {"relevant": "no", "confidence": 0.7}, {"relevant": "yes", "confidence": 0.75}]}'
         mock_create_llm.return_value = mock_llm
 
-        # Create chunks with mid-range similarity scores
+        # Create chunks with mid-range similarity scores (0.55-0.82)
         chunks = [
             {"content": "Mid similarity 1", "similarity_score": 0.70},
             {"content": "Mid similarity 2", "similarity_score": 0.55},
@@ -460,19 +460,19 @@ class TestGraderNode:
 
     @patch('specagent.nodes.grader.create_llm')
     def test_grader_boundary_similarity_scores(self, mock_create_llm):
-        """Test grading behavior at similarity score boundaries (0.5, 0.85)."""
+        """Test grading behavior at similarity score boundaries (0.55, 0.82)."""
         from specagent.nodes.grader import BatchGradeResult
 
         mock_llm = MagicMock()
-        # Chunks at 0.5 and 0.85 should use LLM (3 grades for 3 chunks)
+        # Chunks at 0.55 and 0.82 should use LLM (3 grades for 3 chunks)
         mock_llm.invoke.return_value = '{"grades": [{"relevant": "yes", "confidence": 0.6}, {"relevant": "yes", "confidence": 0.8}, {"relevant": "yes", "confidence": 0.7}]}'
         mock_create_llm.return_value = mock_llm
 
         # Create chunks at boundary values
         chunks = [
-            {"content": "At lower boundary", "similarity_score": 0.5},   # LLM (not < 0.5)
-            {"content": "At upper boundary", "similarity_score": 0.85},  # LLM (not > 0.85)
-            {"content": "Just above lower", "similarity_score": 0.51},   # LLM
+            {"content": "At lower boundary", "similarity_score": 0.55},  # LLM (not < 0.55)
+            {"content": "At upper boundary", "similarity_score": 0.82},  # LLM (not > 0.82)
+            {"content": "Just above lower", "similarity_score": 0.56},   # LLM
         ]
         state = self._create_state_with_chunks("Test question", chunks)
 
@@ -558,3 +558,105 @@ class TestGraderNode:
         assert result["error"] is not None
         assert result["graded_chunks"] == []
         assert result["average_confidence"] == 0.0
+
+    @patch('specagent.nodes.grader.create_llm')
+    def test_grader_auto_grade_threshold_0_82(self, mock_create_llm):
+        """Test auto-grading with new threshold 0.82 instead of 0.85."""
+        mock_llm = MagicMock()
+        # Mock LLM for the boundary chunk at 0.82
+        mock_llm.invoke.return_value = '{"grades": [{"relevant": "yes", "confidence": 0.80}]}'
+        mock_create_llm.return_value = mock_llm
+
+        # Create chunks at and above the new 0.82 threshold
+        chunks = [
+            {"content": "Chunk at 0.83", "similarity_score": 0.83},  # Should auto-grade
+            {"content": "Chunk at 0.82", "similarity_score": 0.82},  # Boundary - LLM
+            {"content": "Chunk at 0.84", "similarity_score": 0.84},  # Should auto-grade
+        ]
+        state = self._create_state_with_chunks("Test question", chunks)
+
+        result = grader_node(state)
+
+        # LLM should be called once for the boundary chunk (0.82)
+        mock_llm.invoke.assert_called_once()
+
+        # All chunks should be graded
+        assert len(result["graded_chunks"]) == 3
+
+        # First and third chunks auto-graded with confidence = similarity
+        assert result["graded_chunks"][0].relevant == "yes"
+        assert result["graded_chunks"][0].confidence == pytest.approx(0.83)
+
+        # Middle chunk graded by LLM
+        assert result["graded_chunks"][1].relevant == "yes"
+        assert result["graded_chunks"][1].confidence == pytest.approx(0.80)
+
+        # Third chunk auto-graded
+        assert result["graded_chunks"][2].relevant == "yes"
+        assert result["graded_chunks"][2].confidence == pytest.approx(0.84)
+
+    @patch('specagent.nodes.grader.create_llm')
+    def test_grader_low_similarity_penalty_threshold_0_55(self, mock_create_llm):
+        """Test auto-grading with low-similarity penalty at 0.55."""
+        mock_llm = MagicMock()
+        mock_create_llm.return_value = mock_llm
+
+        # Create chunks below the new 0.55 threshold
+        chunks = [
+            {"content": "Chunk at 0.54", "similarity_score": 0.54},  # Should auto-grade as no
+            {"content": "Chunk at 0.50", "similarity_score": 0.50},  # Should auto-grade as no
+            {"content": "Chunk at 0.40", "similarity_score": 0.40},  # Should auto-grade as no
+        ]
+        state = self._create_state_with_chunks("Test question", chunks)
+
+        result = grader_node(state)
+
+        # LLM should NOT be called since chunks < 0.55 are auto-graded
+        mock_llm.invoke.assert_not_called()
+
+        # All chunks should be auto-graded as not relevant
+        assert len(result["graded_chunks"]) == 3
+        assert all(gc.relevant == "no" for gc in result["graded_chunks"])
+
+    @patch('specagent.nodes.grader.create_llm')
+    def test_grader_mid_range_0_55_to_0_82_uses_llm(self, mock_create_llm):
+        """Test that mid-range similarity (0.55-0.82) uses LLM."""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = '{"grades": [{"relevant": "yes", "confidence": 0.75}, {"relevant": "yes", "confidence": 0.70}]}'
+        mock_create_llm.return_value = mock_llm
+
+        # Create chunks in the new mid-range
+        chunks = [
+            {"content": "Chunk at 0.60", "similarity_score": 0.60},  # Mid-range - LLM
+            {"content": "Chunk at 0.75", "similarity_score": 0.75},  # Mid-range - LLM
+        ]
+        state = self._create_state_with_chunks("Test question", chunks)
+
+        result = grader_node(state)
+
+        # LLM should be called for mid-range chunks
+        mock_llm.invoke.assert_called_once()
+
+        # Verify all chunks are graded by LLM
+        assert len(result["graded_chunks"]) == 2
+        assert result["graded_chunks"][0].confidence == 0.75
+        assert result["graded_chunks"][1].confidence == 0.70
+
+    @patch('specagent.nodes.grader.create_llm')
+    def test_grader_boundary_at_0_55(self, mock_create_llm):
+        """Test grading behavior at similarity boundary (0.55)."""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = '{"grades": [{"relevant": "yes", "confidence": 0.65}]}'
+        mock_create_llm.return_value = mock_llm
+
+        # Create chunk at boundary
+        chunks = [
+            {"content": "Chunk at 0.55", "similarity_score": 0.55},  # Boundary - should use LLM
+        ]
+        state = self._create_state_with_chunks("Test question", chunks)
+
+        result = grader_node(state)
+
+        # At boundary 0.55, should use LLM (not auto-grade)
+        mock_llm.invoke.assert_called_once()
+        assert len(result["graded_chunks"]) == 1

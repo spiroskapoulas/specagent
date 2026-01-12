@@ -89,11 +89,11 @@ def grader_node(state: "GraphState") -> "GraphState":
         total_confidence = 0.0
 
         for i, chunk in enumerate(chunks_to_grade):
-            if chunk.similarity_score > 0.85:
+            if chunk.similarity_score > 0.82:
                 # Auto-grade as relevant with high confidence
                 grade = GradeResult(
                     relevant="yes",
-                    confidence=min(1.0, chunk.similarity_score + 0.1)
+                    confidence=chunk.similarity_score
                 )
                 graded_chunk = GradedChunk(
                     chunk=chunk,
@@ -102,7 +102,7 @@ def grader_node(state: "GraphState") -> "GraphState":
                 )
                 graded_chunks.append(graded_chunk)
                 total_confidence += grade.confidence
-            elif chunk.similarity_score < 0.5:
+            elif chunk.similarity_score < 0.55:
                 # Auto-grade as not relevant with high confidence
                 grade = GradeResult(
                     relevant="no",

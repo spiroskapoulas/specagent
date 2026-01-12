@@ -25,6 +25,7 @@ Context (from 3GPP specifications):
 
 Rules:
 - Extract exact values/units/terms and cite inline: [TS XX.XXX §Y.Z]
+- For numbers: Extract exact value + unit (e.g., '128 bits', not bytes)
 - Every claim must be cited; no external knowledge
 - If information is absent: "I don't have enough information"
 

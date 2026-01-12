@@ -137,6 +137,8 @@ class TestHallucinationCheckNode:
         state = self._create_state_with_generation(
             "What is the maximum number of HARQ processes in NR?", generation, chunks
         )
+        # Set low confidence to trigger hallucination check (has numerical content)
+        state["average_confidence"] = 0.60
 
         # Call hallucination check node
         result = hallucination_check_node(state)
@@ -163,6 +165,8 @@ class TestHallucinationCheckNode:
         state = self._create_state_with_generation(
             "What is the maximum number of HARQ processes in NR?", generation, chunks
         )
+        # Set low confidence to trigger hallucination check (has numerical content)
+        state["average_confidence"] = 0.60
 
         # Call hallucination check node
         result = hallucination_check_node(state)
@@ -290,6 +294,8 @@ class TestHallucinationCheckNode:
         generation = "The answer is 16 HARQ processes."
 
         state = self._create_state_with_generation("Test?", generation, chunks)
+        # Set low confidence to trigger hallucination check (has numerical content)
+        state["average_confidence"] = 0.60
 
         hallucination_check_node(state)
 
@@ -354,6 +360,8 @@ class TestHallucinationCheckNode:
         generation = "NR supports 16 HARQ processes for both FDD and TDD, handled by MAC."
 
         state = self._create_state_with_generation("Test?", generation, chunks)
+        # Set low confidence to trigger hallucination check (has numerical content)
+        state["average_confidence"] = 0.60
 
         hallucination_check_node(state)
 
@@ -375,18 +383,21 @@ class TestHallucinationCheckNode:
         # Test "yes" -> "grounded"
         mock_llm.invoke.return_value = '{"grounded": "yes", "ungrounded_claims": []}'
         state = self._create_state_with_generation("Q?", "Answer is 5", chunks)
+        state["average_confidence"] = 0.60  # Set low to trigger check
         result = hallucination_check_node(state)
         assert result["hallucination_check"] == "grounded"
 
         # Test "no" -> "not_grounded"
         mock_llm.invoke.return_value = '{"grounded": "no", "ungrounded_claims": ["claim"]}'
         state = self._create_state_with_generation("Q?", "Answer is 10", chunks)
+        state["average_confidence"] = 0.60  # Set low to trigger check
         result = hallucination_check_node(state)
         assert result["hallucination_check"] == "not_grounded"
 
         # Test "partial" -> "partial"
         mock_llm.invoke.return_value = '{"grounded": "partial", "ungrounded_claims": ["claim"]}'
         state = self._create_state_with_generation("Q?", "Answer is 15", chunks)
+        state["average_confidence"] = 0.60  # Set low to trigger check
         result = hallucination_check_node(state)
         assert result["hallucination_check"] == "partial"
 
@@ -620,15 +631,16 @@ class TestHallucinationCheckConditional:
 
     @patch("specagent.nodes.hallucination.create_llm")
     def test_run_check_high_confidence_with_numbers(self, mock_create_llm):
-        """Test that hallucination check runs when generation has numbers even with high confidence."""
+        """Test that hallucination check runs when generation has numbers with mid confidence."""
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = '{"grounded": "yes", "ungrounded_claims": []}'
         mock_create_llm.return_value = mock_llm
 
         generation = "The maximum number of HARQ processes is 16."
         chunks = [{"content": "HARQ processes: 16"}]
+        # Use 0.64 (< 0.65) to trigger check for numerical content
         state = self._create_state_with_generation_and_confidence(
-            generation=generation, average_confidence=0.90, chunks_data=chunks
+            generation=generation, average_confidence=0.64, chunks_data=chunks
         )
 
         result = hallucination_check_node(state)
@@ -639,7 +651,7 @@ class TestHallucinationCheckConditional:
 
     @patch("specagent.nodes.hallucination.create_llm")
     def test_run_check_high_confidence_with_table(self, mock_create_llm):
-        """Test that hallucination check runs when generation has table even with high confidence."""
+        """Test that hallucination check runs when generation has table with mid confidence."""
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = '{"grounded": "yes", "ungrounded_claims": []}'
         mock_create_llm.return_value = mock_llm
@@ -650,8 +662,9 @@ class TestHallucinationCheckConditional:
         | HARQ      | 16    |
         """
         chunks = [{"content": "HARQ processes: 16"}]
+        # Use 0.64 (< 0.65) to trigger check for numerical/tabular content
         state = self._create_state_with_generation_and_confidence(
-            generation=generation, average_confidence=0.90, chunks_data=chunks
+            generation=generation, average_confidence=0.64, chunks_data=chunks
         )
 
         result = hallucination_check_node(state)
@@ -715,15 +728,16 @@ class TestHallucinationCheckConditional:
 
     @patch("specagent.nodes.hallucination.create_llm")
     def test_run_check_with_units(self, mock_create_llm):
-        """Test that numbers with units trigger hallucination check."""
+        """Test that numbers with units trigger hallucination check with mid confidence."""
         mock_llm = MagicMock()
         mock_llm.invoke.return_value = '{"grounded": "yes", "ungrounded_claims": []}'
         mock_create_llm.return_value = mock_llm
 
         generation = "The latency is 100ms and bandwidth is 20MHz."
         chunks = [{"content": "Latency: 100ms, Bandwidth: 20MHz"}]
+        # Use 0.64 (< 0.65) to trigger check for numerical content
         state = self._create_state_with_generation_and_confidence(
-            generation=generation, average_confidence=0.95, chunks_data=chunks
+            generation=generation, average_confidence=0.64, chunks_data=chunks
         )
 
         result = hallucination_check_node(state)
@@ -804,3 +818,96 @@ class TestHallucinationCheckConditional:
 
         assert result["hallucination_check"] == "grounded"
         assert result["ungrounded_claims"] == []
+
+    @patch("specagent.nodes.hallucination.create_llm")
+    def test_skip_check_numerical_content_confidence_0_65(self, mock_create_llm):
+        """Test that hallucination check is skipped for numerical content with confidence >= 0.65."""
+        mock_llm = MagicMock()
+        mock_create_llm.return_value = mock_llm
+
+        generation = "The maximum is 16 HARQ processes."
+        chunks = [{"content": "HARQ processes: 16"}]
+        state = self._create_state_with_generation_and_confidence(
+            generation=generation, average_confidence=0.65, chunks_data=chunks
+        )
+
+        result = hallucination_check_node(state)
+
+        # Should skip check - no LLM call (confidence >= 0.65 with numerical content)
+        mock_llm.invoke.assert_not_called()
+        assert result["hallucination_check"] == "grounded"
+        assert result["ungrounded_claims"] == []
+
+    @patch("specagent.nodes.hallucination.create_llm")
+    def test_run_check_numerical_content_confidence_below_0_65(self, mock_create_llm):
+        """Test that hallucination check runs for numerical content with confidence < 0.65."""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = '{"grounded": "yes", "ungrounded_claims": []}'
+        mock_create_llm.return_value = mock_llm
+
+        generation = "The maximum is 16 HARQ processes."
+        chunks = [{"content": "HARQ processes: 16"}]
+        state = self._create_state_with_generation_and_confidence(
+            generation=generation, average_confidence=0.64, chunks_data=chunks
+        )
+
+        result = hallucination_check_node(state)
+
+        # Should run check - LLM was called (confidence < 0.65 with numerical content)
+        mock_llm.invoke.assert_called_once()
+        assert result["hallucination_check"] == "grounded"
+
+    @patch("specagent.nodes.hallucination.create_llm")
+    def test_skip_check_non_numerical_confidence_0_70(self, mock_create_llm):
+        """Test that hallucination check is skipped for non-numerical content with confidence >= 0.70."""
+        mock_llm = MagicMock()
+        mock_create_llm.return_value = mock_llm
+
+        generation = "This describes the protocol behavior without numbers."
+        state = self._create_state_with_generation_and_confidence(
+            generation=generation, average_confidence=0.70
+        )
+
+        result = hallucination_check_node(state)
+
+        # Should skip check - no LLM call (confidence >= 0.70 without numerical content)
+        mock_llm.invoke.assert_not_called()
+        assert result["hallucination_check"] == "grounded"
+        assert result["ungrounded_claims"] == []
+
+    @patch("specagent.nodes.hallucination.create_llm")
+    def test_run_check_non_numerical_confidence_below_0_70(self, mock_create_llm):
+        """Test that hallucination check runs for non-numerical content with confidence < 0.70."""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = '{"grounded": "yes", "ungrounded_claims": []}'
+        mock_create_llm.return_value = mock_llm
+
+        generation = "This describes the protocol behavior."
+        chunks = [{"content": "Protocol behavior description"}]
+        state = self._create_state_with_generation_and_confidence(
+            generation=generation, average_confidence=0.69, chunks_data=chunks
+        )
+
+        result = hallucination_check_node(state)
+
+        # Should run check - LLM was called (confidence < 0.70 without numerical content)
+        mock_llm.invoke.assert_called_once()
+        assert result["hallucination_check"] == "grounded"
+
+    @patch("specagent.nodes.hallucination.create_llm")
+    def test_skip_check_numerical_confidence_between_0_65_and_0_70(self, mock_create_llm):
+        """Test skip for numerical content with confidence in range [0.65, 0.70)."""
+        mock_llm = MagicMock()
+        mock_create_llm.return_value = mock_llm
+
+        generation = "The value is 100ms and bandwidth is 20MHz."
+        chunks = [{"content": "Latency: 100ms, Bandwidth: 20MHz"}]
+        state = self._create_state_with_generation_and_confidence(
+            generation=generation, average_confidence=0.67, chunks_data=chunks
+        )
+
+        result = hallucination_check_node(state)
+
+        # Should skip check (0.67 >= 0.65 with numerical content)
+        mock_llm.invoke.assert_not_called()
+        assert result["hallucination_check"] == "grounded"

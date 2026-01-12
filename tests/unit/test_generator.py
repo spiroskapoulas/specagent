@@ -743,3 +743,27 @@ class TestGeneratorNode:
         assert "Chunk 1" in prompt
         assert "Chunk 2" in prompt
         assert "Chunk 3" in prompt
+
+    @patch('specagent.nodes.generator.create_llm')
+    def test_generator_prompt_includes_exact_units_guidance(self, mock_create_llm):
+        """Test that generator prompt includes guidance for extracting exact units."""
+        mock_llm = MagicMock()
+        mock_llm.invoke.return_value = "The size is 128 bits [TS 38.321 §5.4]"
+        mock_create_llm.return_value = mock_llm
+
+        chunks = [{"content": "The PDU size is 128 bits", "relevant": "yes"}]
+        state = self._create_state_with_graded_chunks(
+            "What is the PDU size?",
+            chunks
+        )
+
+        generator_node(state)
+
+        # Verify prompt includes guidance for exact units
+        invoke_call_args = mock_llm.invoke.call_args
+        prompt = invoke_call_args[0][0]
+
+        # Should include explicit guidance about numbers with units
+        assert "For numbers:" in prompt or "numbers" in prompt.lower()
+        assert "exact value" in prompt.lower() or "Extract exact" in prompt
+        assert "unit" in prompt.lower()
